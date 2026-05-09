@@ -1,0 +1,51 @@
+{
+  "title": "S/MIME Notify",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure S/MIME Notify",
+        "description": "Configure SMTP and S/MIME defaults.",
+        "data": {
+          "notify_service_name": "Notify service name",
+          "smtp_host": "SMTP host",
+          "smtp_port": "SMTP port",
+          "smtp_encryption": "SMTP encryption",
+          "smtp_username": "SMTP username",
+          "smtp_password": "SMTP password",
+          "smtp_timeout": "SMTP timeout (seconds)",
+          "tls_verify": "Verify TLS certificate",
+          "from_name": "From name",
+          "from_email": "From email",
+          "default_recipient": "Default recipient",
+          "sign_default": "Sign by default",
+          "sign_cert_path": "Signing certificate path",
+          "sign_key_path": "Private key path",
+          "sign_key_password": "Private key password",
+          "include_cert_chain": "Include certificate chain",
+          "encrypt_default": "Encrypt by default",
+          "allow_unencrypted_fallback_default": "Allow unencrypted fallback",
+          "skip_recipients_without_cert_default": "Skip recipients without certificate",
+          "local_source_enabled": "Enable local certificate source",
+          "local_cert_dir": "Local recipient certificate directory",
+          "file_types": "Certificate file types (comma separated)",
+          "hash_mode": "Recipient lookup hash mode",
+          "source_order": "Source order (comma separated)",
+          "remote_source_enabled": "Enable remote HTTPS source",
+          "remote_base_url": "Remote HTTPS base URL",
+          "remote_allow_insecure_http": "Allow insecure HTTP",
+          "remote_timeout": "Remote HTTP timeout (seconds)",
+          "remote_cache_ttl_fallback": "Remote cache TTL fallback (seconds)",
+          "smimea_source_enabled": "Enable SMIMEA DNS source"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "S/MIME Notify options",
+        "description": "Update SMTP and S/MIME settings"
+      }
+    }
+  }
+}
