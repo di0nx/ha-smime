@@ -6,7 +6,6 @@ import logging
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_RECIPIENT
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
@@ -23,10 +22,11 @@ from .const import (
 from .notify import SmimeNotifyManager
 
 _LOGGER = logging.getLogger(__name__)
+SERVICE_FIELD_RECIPIENT = "recipient"
 
 SEND_TEST_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_RECIPIENT): cv.string,
+        vol.Required(SERVICE_FIELD_RECIPIENT): cv.string,
         vol.Optional("subject", default="S/MIME Test Email"): cv.string,
         vol.Optional("message", default="S/MIME plaintext test message."): cv.string,
         vol.Optional("html", default="<p>S/MIME HTML test message.</p>"): cv.string,

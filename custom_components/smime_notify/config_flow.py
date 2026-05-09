@@ -172,7 +172,7 @@ class SmimeNotifyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data[CONF_SOURCE_ORDER] = ",".join(_split_csv(user_input[CONF_SOURCE_ORDER]))
 
             await self.async_set_unique_id(
-                f"{data[CONF_FROM_EMAIL].strip().lower()}@{data[CONF_SMTP_HOST].strip().lower()}"
+                f"{data[CONF_FROM_EMAIL].strip().lower()}::{data[CONF_SMTP_HOST].strip().lower()}"
             )
             self._abort_if_unique_id_configured()
 

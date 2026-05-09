@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html as html_lib
 import logging
 import mimetypes
 import ssl
@@ -166,7 +167,7 @@ class SmimeNotifyManager:
         recipient = call.data["recipient"]
         subject = call.data.get("subject", "S/MIME Test Email")
         message = call.data.get("message", "S/MIME test message")
-        html = call.data.get("html", f"<p>{message}</p>")
+        html = call.data.get("html", f"<p>{html_lib.escape(message)}</p>")
         sign = call.data.get("sign")
         encrypt = call.data.get("encrypt")
 
@@ -450,8 +451,6 @@ class SmimeNotifyManager:
                 filename=file_path.name,
             )
 
-        if not to and not cc and not bcc:
-            raise HomeAssistantError("No recipients specified")
         return message
 
     def _build_pkcs7_wrapper(self, base_message: EmailMessage, pkcs7_der: bytes, *, smime_type: str) -> EmailMessage:
