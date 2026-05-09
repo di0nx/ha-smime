@@ -66,8 +66,22 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up global S/MIME Notify services."""
     hass.data.setdefault(DOMAIN, {})
 
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up S/MIME notify from a config entry."""
+    manager = SmimeNotifyManager(hass=hass, entry=entry)
+
+    notify_service_name = manager.notify_service_name
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        DATA_MANAGER: manager,
+        "notify_service": notify_service_name,
+    }
+
+    async def _notify_service_handler(call: ServiceCall) -> None:
+        await manager.async_send_notify_service(call)
+
     async def _send(call: ServiceCall) -> None:
-        await _async_get_manager(hass).async_send_service(call)
+        await manager.async_send_service(call)
 
     async def _send_test_email(call: ServiceCall) -> None:
         await _async_get_manager(hass).async_send_test_email(call)
@@ -84,6 +98,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async def _validate_config(call: ServiceCall) -> None:
         await _async_get_manager(hass).async_validate_config_service()
 
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEND,
+        _send,
+        schema=SEND_SCHEMA,
+    )
     hass.services.async_register(
         DOMAIN,
         SERVICE_SEND,
@@ -122,8 +142,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up S/MIME notify from a config entry."""
-    from .notify import SmimeNotifyManager
-
     manager = SmimeNotifyManager(hass=hass, entry=entry)
 
     notify_service_name = manager.notify_service_name
@@ -139,6 +157,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     _LOGGER.info(
@@ -148,7 +168,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-def _async_get_manager(hass: HomeAssistant) -> Any:
+def _async_get_manager(hass: HomeAssistant) -> SmimeNotifyManager:
     """Return the loaded manager for the single supported config entry."""
     for entry_data in hass.data.get(DOMAIN, {}).values():
         manager = entry_data.get(DATA_MANAGER)
@@ -176,6 +196,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     notify_service_name = data.get("notify_service", DEFAULT_NOTIFY_SERVICE_NAME)
     hass.services.async_remove("notify", notify_service_name)
+
+    if hass.services.has_service(DOMAIN, SERVICE_SEND):
+        hass.services.async_remove(DOMAIN, SERVICE_SEND)
+    if hass.services.has_service(DOMAIN, SERVICE_SEND_TEST_EMAIL):
+        hass.services.async_remove(DOMAIN, SERVICE_SEND_TEST_EMAIL)
+    if hass.services.has_service(DOMAIN, SERVICE_TEST_RECIPIENT_CERTIFICATE):
+        hass.services.async_remove(DOMAIN, SERVICE_TEST_RECIPIENT_CERTIFICATE)
+    if hass.services.has_service(DOMAIN, SERVICE_CLEAR_CERTIFICATE_CACHE):
+        hass.services.async_remove(DOMAIN, SERVICE_CLEAR_CERTIFICATE_CACHE)
+    if hass.services.has_service(DOMAIN, SERVICE_RELOAD_CERTIFICATES):
+        hass.services.async_remove(DOMAIN, SERVICE_RELOAD_CERTIFICATES)
+    if hass.services.has_service(DOMAIN, SERVICE_VALIDATE_CONFIG):
+        hass.services.async_remove(DOMAIN, SERVICE_VALIDATE_CONFIG)
 
     _LOGGER.debug("S/MIME Notify unloaded for %s", entry.entry_id)
     return True
