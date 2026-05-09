@@ -825,6 +825,15 @@ class SmimeNotifyManager:
         return ordered or ["local"]
 
     def _resolve_recipient_certificate_local(self, email: str) -> RecipientCertResult:
+        if not self.config.get(CONF_LOCAL_SOURCE_ENABLED, True):
+            return RecipientCertResult(
+                email=email,
+                certificate=None,
+                source="local",
+                location=None,
+                error="local certificate source disabled",
+            )
+
         cert_dir = Path(str(self.config.get(CONF_LOCAL_CERT_DIR) or "").strip())
         attempted: list[str] = []
         if not cert_dir.exists() or not cert_dir.is_dir():
