@@ -34,7 +34,9 @@ async def async_get_config_entry_diagnostics(
     cert_expiry: str | None = None
     cache_size = 0
     if manager and getattr(manager, "_sender_material", None):
-        cert_expiry = manager._sender_material.signing_cert.not_valid_after_utc.isoformat()
+        cert_expiry = (
+            manager._sender_material.signing_cert.not_valid_after_utc.isoformat()
+        )
     if manager and hasattr(manager, "_cert_cache"):
         cache_size = len(manager._cert_cache)
 
