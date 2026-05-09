@@ -282,6 +282,9 @@ class SmimeNotifyManager:
             raise HomeAssistantError(
                 f"No valid recipient certificate found for {email}: {result.error or 'certificate not found'}"
             )
+            raise HomeAssistantError(
+                f"No valid recipient certificate found for {email}"
+            )
 
         cert = result.certificate
         _LOGGER.info(
@@ -823,8 +826,25 @@ class SmimeNotifyManager:
             if enabled and source not in ordered:
                 ordered.append(source)
         return ordered or ["local"]
+        if email in self._cert_cache:
+            return self._cert_cache[email]
+
+        result = await self.hass.async_add_executor_job(
+            self._resolve_recipient_certificate_local, email
+        )
+        self._cert_cache[email] = result
+        return result
 
     def _resolve_recipient_certificate_local(self, email: str) -> RecipientCertResult:
+        if not self.config.get(CONF_LOCAL_SOURCE_ENABLED, True):
+            return RecipientCertResult(
+                email=email,
+                certificate=None,
+                source="local",
+                location=None,
+                error="local certificate source disabled",
+            )
+
         cert_dir = Path(str(self.config.get(CONF_LOCAL_CERT_DIR) or "").strip())
         attempted: list[str] = []
         if not cert_dir.exists() or not cert_dir.is_dir():
@@ -1097,6 +1117,25 @@ class SmimeNotifyEntity(NotifyEntity):
         """Send a notification message through the configured S/MIME mailer."""
         await self._manager.async_send_smime_mail(
             {"title": title or "", "message": message}, service_context="notify_entity"
+        html = f"<p>{html_lib.escape(message)}</p>"
+        default_recipient = str(
+            self._manager.config.get(CONF_DEFAULT_RECIPIENT, "")
+        ).strip()
+        await self._manager._send_message(
+            title=title or "",
+            plaintext=message,
+            html=html,
+            to=[default_recipient] if default_recipient else [],
+            cc=[],
+            bcc=[],
+            reply_to=None,
+            attachments=[],
+            extra_headers={},
+            sign=None,
+            encrypt=None,
+            allow_unencrypted_fallback=None,
+            skip_recipients_without_cert=None,
+            service_context="notify_entity",
         )
         if hasattr(self, "_async_record_notification"):
             self._async_record_notification()
