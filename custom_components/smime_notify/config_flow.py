@@ -10,6 +10,7 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_ALLOW_UNENCRYPTED_FALLBACK_DEFAULT,
+    CONF_CERT_EXPIRY_WARNING_DAYS,
     CONF_DEFAULT_RECIPIENT,
     CONF_ENCRYPT_DEFAULT,
     CONF_FILE_TYPES,
@@ -39,16 +40,26 @@ from .const import (
     CONF_SMTP_USERNAME,
     CONF_SOURCE_ORDER,
     CONF_TLS_VERIFY,
-    DEFAULT_ALLOW_UNENCRYPTED_FALLBACK,
-    DEFAULT_ENCRYPT,
+    DEFAULT_ALLOW_UNENCRYPTED_FALLBACK_DEFAULT,
+    DEFAULT_ENCRYPT_DEFAULT,
     DEFAULT_HASH_MODE,
     DEFAULT_LOCAL_FILE_TYPES,
     DEFAULT_NOTIFY_SERVICE_NAME,
-    DEFAULT_SIGN,
-    DEFAULT_SKIP_RECIPIENTS_WITHOUT_CERT,
+    DEFAULT_SIGN_DEFAULT,
+    DEFAULT_SKIP_RECIPIENTS_WITHOUT_CERT_DEFAULT,
     DEFAULT_SMTP_PORT,
     DEFAULT_SMTP_TIMEOUT,
     DEFAULT_TLS_VERIFY,
+    DEFAULT_CERT_EXPIRY_WARNING_DAYS,
+    DEFAULT_FROM_NAME,
+    DEFAULT_INCLUDE_CERT_CHAIN,
+    DEFAULT_LOCAL_CERT_DIR,
+    DEFAULT_REMOTE_ALLOW_INSECURE_HTTP,
+    DEFAULT_REMOTE_CACHE_TTL_FALLBACK,
+    DEFAULT_REMOTE_SOURCE_ENABLED,
+    DEFAULT_REMOTE_TIMEOUT,
+    DEFAULT_SMIMEA_SOURCE_ENABLED,
+    DEFAULT_SOURCE_ORDER,
     DOMAIN,
     HASH_MODES,
     SMTP_ENCRYPTION_MODES,
@@ -62,7 +73,7 @@ def _split_csv(value: str) -> list[str]:
 def _merge_entry_data(entry: config_entries.ConfigEntry) -> dict[str, Any]:
     merged = {**entry.data, **entry.options}
     merged.setdefault(CONF_FILE_TYPES, DEFAULT_LOCAL_FILE_TYPES)
-    merged.setdefault(CONF_SOURCE_ORDER, "local")
+    merged.setdefault(CONF_SOURCE_ORDER, DEFAULT_SOURCE_ORDER)
     return merged
 
 
@@ -71,90 +82,171 @@ def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
         {
             vol.Required(
                 CONF_NOTIFY_SERVICE_NAME,
-                default=defaults.get(CONF_NOTIFY_SERVICE_NAME, DEFAULT_NOTIFY_SERVICE_NAME),
+                default=defaults.get(
+                    CONF_NOTIFY_SERVICE_NAME, DEFAULT_NOTIFY_SERVICE_NAME
+                ),
             ): str,
             vol.Required(CONF_SMTP_HOST, default=defaults.get(CONF_SMTP_HOST, "")): str,
-            vol.Required(CONF_SMTP_PORT, default=defaults.get(CONF_SMTP_PORT, DEFAULT_SMTP_PORT)): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=65535, mode=selector.NumberSelectorMode.BOX)
+            vol.Required(
+                CONF_SMTP_PORT, default=defaults.get(CONF_SMTP_PORT, DEFAULT_SMTP_PORT)
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1, max=65535, mode=selector.NumberSelectorMode.BOX
+                )
             ),
             vol.Required(
                 CONF_SMTP_ENCRYPTION,
                 default=defaults.get(CONF_SMTP_ENCRYPTION, SMTP_ENCRYPTION_MODES[1]),
             ): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=SMTP_ENCRYPTION_MODES, mode=selector.SelectSelectorMode.DROPDOWN)
+                selector.SelectSelectorConfig(
+                    options=SMTP_ENCRYPTION_MODES,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
             ),
-            vol.Optional(CONF_SMTP_USERNAME, default=defaults.get(CONF_SMTP_USERNAME, "")): str,
-            vol.Optional(CONF_SMTP_PASSWORD, default=defaults.get(CONF_SMTP_PASSWORD, "")): selector.TextSelector(
+            vol.Optional(
+                CONF_SMTP_USERNAME, default=defaults.get(CONF_SMTP_USERNAME, "")
+            ): str,
+            vol.Optional(
+                CONF_SMTP_PASSWORD, default=defaults.get(CONF_SMTP_PASSWORD, "")
+            ): selector.TextSelector(
                 selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
             ),
             vol.Required(
                 CONF_SMTP_TIMEOUT,
                 default=defaults.get(CONF_SMTP_TIMEOUT, DEFAULT_SMTP_TIMEOUT),
             ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=5, max=300, mode=selector.NumberSelectorMode.BOX)
+                selector.NumberSelectorConfig(
+                    min=5, max=300, mode=selector.NumberSelectorMode.BOX
+                )
             ),
-            vol.Required(CONF_TLS_VERIFY, default=defaults.get(CONF_TLS_VERIFY, DEFAULT_TLS_VERIFY)): bool,
-            vol.Optional(CONF_FROM_NAME, default=defaults.get(CONF_FROM_NAME, "Home Assistant")): str,
-            vol.Required(CONF_FROM_EMAIL, default=defaults.get(CONF_FROM_EMAIL, "")): str,
+            vol.Required(
+                CONF_TLS_VERIFY,
+                default=defaults.get(CONF_TLS_VERIFY, DEFAULT_TLS_VERIFY),
+            ): bool,
+            vol.Optional(
+                CONF_FROM_NAME, default=defaults.get(CONF_FROM_NAME, DEFAULT_FROM_NAME)
+            ): str,
+            vol.Required(
+                CONF_FROM_EMAIL, default=defaults.get(CONF_FROM_EMAIL, "")
+            ): str,
             vol.Optional(
                 CONF_DEFAULT_RECIPIENT,
                 default=defaults.get(CONF_DEFAULT_RECIPIENT, ""),
             ): str,
-            vol.Required(CONF_SIGN_DEFAULT, default=defaults.get(CONF_SIGN_DEFAULT, DEFAULT_SIGN)): bool,
-            vol.Required(CONF_SIGN_CERT_PATH, default=defaults.get(CONF_SIGN_CERT_PATH, "")): str,
-            vol.Required(CONF_SIGN_KEY_PATH, default=defaults.get(CONF_SIGN_KEY_PATH, "")): str,
+            vol.Required(
+                CONF_SIGN_DEFAULT,
+                default=defaults.get(CONF_SIGN_DEFAULT, DEFAULT_SIGN_DEFAULT),
+            ): bool,
+            vol.Required(
+                CONF_SIGN_CERT_PATH, default=defaults.get(CONF_SIGN_CERT_PATH, "")
+            ): str,
+            vol.Required(
+                CONF_SIGN_KEY_PATH, default=defaults.get(CONF_SIGN_KEY_PATH, "")
+            ): str,
             vol.Optional(
                 CONF_SIGN_KEY_PASSWORD,
                 default=defaults.get(CONF_SIGN_KEY_PASSWORD, ""),
-            ): selector.TextSelector(selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)),
+            ): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
             vol.Required(
                 CONF_INCLUDE_CERT_CHAIN,
-                default=defaults.get(CONF_INCLUDE_CERT_CHAIN, True),
+                default=defaults.get(
+                    CONF_INCLUDE_CERT_CHAIN, DEFAULT_INCLUDE_CERT_CHAIN
+                ),
             ): bool,
-            vol.Required(CONF_ENCRYPT_DEFAULT, default=defaults.get(CONF_ENCRYPT_DEFAULT, DEFAULT_ENCRYPT)): bool,
+            vol.Required(
+                CONF_CERT_EXPIRY_WARNING_DAYS,
+                default=defaults.get(
+                    CONF_CERT_EXPIRY_WARNING_DAYS, DEFAULT_CERT_EXPIRY_WARNING_DAYS
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0, max=365, mode=selector.NumberSelectorMode.BOX
+                )
+            ),
+            vol.Required(
+                CONF_ENCRYPT_DEFAULT,
+                default=defaults.get(CONF_ENCRYPT_DEFAULT, DEFAULT_ENCRYPT_DEFAULT),
+            ): bool,
             vol.Required(
                 CONF_ALLOW_UNENCRYPTED_FALLBACK_DEFAULT,
                 default=defaults.get(
                     CONF_ALLOW_UNENCRYPTED_FALLBACK_DEFAULT,
-                    DEFAULT_ALLOW_UNENCRYPTED_FALLBACK,
+                    DEFAULT_ALLOW_UNENCRYPTED_FALLBACK_DEFAULT,
                 ),
             ): bool,
             vol.Required(
                 CONF_SKIP_RECIPIENTS_WITHOUT_CERT_DEFAULT,
                 default=defaults.get(
                     CONF_SKIP_RECIPIENTS_WITHOUT_CERT_DEFAULT,
-                    DEFAULT_SKIP_RECIPIENTS_WITHOUT_CERT,
+                    DEFAULT_SKIP_RECIPIENTS_WITHOUT_CERT_DEFAULT,
                 ),
             ): bool,
             vol.Required(
                 CONF_LOCAL_SOURCE_ENABLED,
                 default=defaults.get(CONF_LOCAL_SOURCE_ENABLED, True),
             ): bool,
-            vol.Required(CONF_LOCAL_CERT_DIR, default=defaults.get(CONF_LOCAL_CERT_DIR, "/ssl/smime/publickeys")): str,
+            vol.Required(
+                CONF_LOCAL_CERT_DIR,
+                default=defaults.get(CONF_LOCAL_CERT_DIR, DEFAULT_LOCAL_CERT_DIR),
+            ): str,
             vol.Required(
                 CONF_FILE_TYPES,
-                default=", ".join(defaults.get(CONF_FILE_TYPES, DEFAULT_LOCAL_FILE_TYPES)),
+                default=", ".join(
+                    defaults.get(CONF_FILE_TYPES, DEFAULT_LOCAL_FILE_TYPES)
+                ),
             ): str,
-            vol.Required(CONF_HASH_MODE, default=defaults.get(CONF_HASH_MODE, DEFAULT_HASH_MODE)): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=HASH_MODES, mode=selector.SelectSelectorMode.DROPDOWN)
+            vol.Required(
+                CONF_HASH_MODE, default=defaults.get(CONF_HASH_MODE, DEFAULT_HASH_MODE)
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=HASH_MODES, mode=selector.SelectSelectorMode.DROPDOWN
+                )
             ),
-            vol.Required(CONF_SOURCE_ORDER, default=defaults.get(CONF_SOURCE_ORDER, "local,smimea,remote")): str,
-            vol.Required(CONF_REMOTE_SOURCE_ENABLED, default=defaults.get(CONF_REMOTE_SOURCE_ENABLED, False)): bool,
-            vol.Optional(CONF_REMOTE_BASE_URL, default=defaults.get(CONF_REMOTE_BASE_URL, "")): str,
+            vol.Required(
+                CONF_SOURCE_ORDER,
+                default=defaults.get(CONF_SOURCE_ORDER, DEFAULT_SOURCE_ORDER),
+            ): str,
+            vol.Required(
+                CONF_REMOTE_SOURCE_ENABLED,
+                default=defaults.get(
+                    CONF_REMOTE_SOURCE_ENABLED, DEFAULT_REMOTE_SOURCE_ENABLED
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_REMOTE_BASE_URL, default=defaults.get(CONF_REMOTE_BASE_URL, "")
+            ): str,
             vol.Required(
                 CONF_REMOTE_ALLOW_INSECURE_HTTP,
-                default=defaults.get(CONF_REMOTE_ALLOW_INSECURE_HTTP, False),
+                default=defaults.get(
+                    CONF_REMOTE_ALLOW_INSECURE_HTTP, DEFAULT_REMOTE_ALLOW_INSECURE_HTTP
+                ),
             ): bool,
-            vol.Required(CONF_REMOTE_TIMEOUT, default=defaults.get(CONF_REMOTE_TIMEOUT, 10)): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=120, mode=selector.NumberSelectorMode.BOX)
+            vol.Required(
+                CONF_REMOTE_TIMEOUT,
+                default=defaults.get(CONF_REMOTE_TIMEOUT, DEFAULT_REMOTE_TIMEOUT),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1, max=120, mode=selector.NumberSelectorMode.BOX
+                )
             ),
             vol.Required(
                 CONF_REMOTE_CACHE_TTL_FALLBACK,
-                default=defaults.get(CONF_REMOTE_CACHE_TTL_FALLBACK, 300),
+                default=defaults.get(
+                    CONF_REMOTE_CACHE_TTL_FALLBACK, DEFAULT_REMOTE_CACHE_TTL_FALLBACK
+                ),
             ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=86400, mode=selector.NumberSelectorMode.BOX)
+                selector.NumberSelectorConfig(
+                    min=0, max=86400, mode=selector.NumberSelectorMode.BOX
+                )
             ),
-            vol.Required(CONF_SMIMEA_SOURCE_ENABLED, default=defaults.get(CONF_SMIMEA_SOURCE_ENABLED, False)): bool,
+            vol.Required(
+                CONF_SMIMEA_SOURCE_ENABLED,
+                default=defaults.get(
+                    CONF_SMIMEA_SOURCE_ENABLED, DEFAULT_SMIMEA_SOURCE_ENABLED
+                ),
+            ): bool,
         }
     )
 
@@ -166,10 +258,15 @@ class SmimeNotifyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
+        if self._async_current_entries():
+            return self.async_abort(reason="single_instance_allowed")
+
         if user_input is not None:
             data = dict(user_input)
             data[CONF_FILE_TYPES] = _split_csv(user_input[CONF_FILE_TYPES])
-            data[CONF_SOURCE_ORDER] = ",".join(_split_csv(user_input[CONF_SOURCE_ORDER]))
+            data[CONF_SOURCE_ORDER] = ",".join(
+                _split_csv(user_input[CONF_SOURCE_ORDER])
+            )
 
             await self.async_set_unique_id(
                 f"{data[CONF_FROM_EMAIL].strip().lower()}::{data[CONF_SMTP_HOST].strip().lower()}"
@@ -203,7 +300,9 @@ class SmimeNotifyOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             data = dict(user_input)
             data[CONF_FILE_TYPES] = _split_csv(user_input[CONF_FILE_TYPES])
-            data[CONF_SOURCE_ORDER] = ",".join(_split_csv(user_input[CONF_SOURCE_ORDER]))
+            data[CONF_SOURCE_ORDER] = ",".join(
+                _split_csv(user_input[CONF_SOURCE_ORDER])
+            )
             return self.async_create_entry(title="", data=data)
 
         defaults = _merge_entry_data(self._config_entry)
