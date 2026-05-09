@@ -22,6 +22,7 @@
           "sign_key_path": "Pfad privater Schlüssel",
           "sign_key_password": "Passwort privater Schlüssel",
           "include_cert_chain": "Zertifikatskette einbeziehen",
+          "cert_expiry_warning_days": "Warnung vor Zertifikatsablauf (Tage)",
           "encrypt_default": "Standardmäßig verschlüsseln",
           "allow_unencrypted_fallback_default": "Unverschlüsselten Fallback erlauben",
           "skip_recipients_without_cert_default": "Empfänger ohne Zertifikat überspringen",
@@ -38,6 +39,9 @@
           "smimea_source_enabled": "SMIMEA-DNS-Quelle aktivieren"
         }
       }
+    },
+    "abort": {
+      "single_instance_allowed": "Es ist nur eine S/MIME Notify-Instanz erlaubt."
     }
   },
   "options": {
