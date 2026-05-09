@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -24,7 +25,6 @@ from .const import (
     SMTP_ENCRYPTION_SSL,
     SMTP_ENCRYPTION_SSL_LEGACY,
 )
-from .notify import SmimeNotifyManager
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.NOTIFY]
