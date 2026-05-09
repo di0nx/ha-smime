@@ -20,9 +20,11 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, pkcs7, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from homeassistant.components.notify import NotifyEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import slugify
 
 from .const import (
@@ -49,10 +51,21 @@ from .const import (
     CONF_SMTP_TIMEOUT,
     CONF_SMTP_USERNAME,
     CONF_TLS_VERIFY,
+    DATA_MANAGER,
+    DEFAULT_ALLOW_UNENCRYPTED_FALLBACK,
     DEFAULT_CERT_EXPIRY_WARNING_DAYS,
+    DEFAULT_ENCRYPT_DEFAULT,
+    DEFAULT_FROM_NAME,
     DEFAULT_HASH_MODE,
+    DEFAULT_INCLUDE_CERT_CHAIN,
     DEFAULT_LOCAL_FILE_TYPES,
     DEFAULT_NOTIFY_SERVICE_NAME,
+    DEFAULT_SIGN_DEFAULT,
+    DEFAULT_SKIP_RECIPIENTS_WITHOUT_CERT,
+    DEFAULT_SMTP_PORT,
+    DEFAULT_SMTP_TIMEOUT,
+    DEFAULT_TLS_VERIFY,
+    DOMAIN,
     HASH_MODE_BOTH_HASH_THEN_RAW,
     HASH_MODE_RAW_EMAIL,
     HASH_MODE_SHA256_EMAIL_HEX,
@@ -109,6 +122,16 @@ class SmimeNotifyManager:
         merged = {**self.entry.data, **self.entry.options}
         merged.setdefault(CONF_FILE_TYPES, DEFAULT_LOCAL_FILE_TYPES)
         merged.setdefault(CONF_HASH_MODE, DEFAULT_HASH_MODE)
+        merged.setdefault(CONF_SIGN_DEFAULT, DEFAULT_SIGN_DEFAULT)
+        merged.setdefault(CONF_ENCRYPT_DEFAULT, DEFAULT_ENCRYPT_DEFAULT)
+        merged.setdefault(CONF_ALLOW_UNENCRYPTED_FALLBACK_DEFAULT, DEFAULT_ALLOW_UNENCRYPTED_FALLBACK)
+        merged.setdefault(CONF_SKIP_RECIPIENTS_WITHOUT_CERT_DEFAULT, DEFAULT_SKIP_RECIPIENTS_WITHOUT_CERT)
+        merged.setdefault(CONF_INCLUDE_CERT_CHAIN, DEFAULT_INCLUDE_CERT_CHAIN)
+        merged.setdefault(CONF_TLS_VERIFY, DEFAULT_TLS_VERIFY)
+        merged.setdefault(CONF_SMTP_PORT, DEFAULT_SMTP_PORT)
+        merged.setdefault(CONF_SMTP_TIMEOUT, DEFAULT_SMTP_TIMEOUT)
+        merged.setdefault(CONF_FROM_NAME, DEFAULT_FROM_NAME)
+        merged.setdefault(CONF_CERT_EXPIRY_WARNING_DAYS, DEFAULT_CERT_EXPIRY_WARNING_DAYS)
         return merged
 
     @property
@@ -124,6 +147,12 @@ class SmimeNotifyManager:
 
     async def async_validate_sender_material(self) -> None:
         """Validate sender cert and key are loadable and matching."""
+        cert_path = str(self.config.get(CONF_SIGN_CERT_PATH) or "").strip()
+        key_path = str(self.config.get(CONF_SIGN_KEY_PATH) or "").strip()
+        if not cert_path or not key_path:
+            raise HomeAssistantError(
+                "Signing certificate path and private key path must be configured to enable signing"
+            )
         material = await self.hass.async_add_executor_job(self._load_sender_material)
         self._sender_material = material
 
@@ -225,7 +254,7 @@ class SmimeNotifyManager:
         if not plaintext:
             raise HomeAssistantError("Plaintext body is required")
         if not html:
-            raise HomeAssistantError("HTML body is required in data.html")
+            html = f"<p>{html_lib.escape(plaintext)}</p>"
 
         target = _as_email_list(data.get("target"))
         if not target:
@@ -726,3 +755,73 @@ def _load_first_certificate(raw: bytes) -> x509.Certificate:
     if not certs:
         raise HomeAssistantError("No certificate found")
     return certs[0]
+
+
+# ---------------------------------------------------------------------------
+# Home Assistant notify platform entry point
+# ---------------------------------------------------------------------------
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the S/MIME notify entity from a config entry."""
+    manager: SmimeNotifyManager = hass.data[DOMAIN][config_entry.entry_id][DATA_MANAGER]
+    async_add_entities([SmimeNotifyEntity(manager)])
+
+
+class SmimeNotifyEntity(NotifyEntity):
+    """S/MIME Notify entity that sends signed/encrypted emails via SMTP."""
+
+    _attr_should_poll = False
+    _attr_has_entity_name = False
+
+    def __init__(self, manager: SmimeNotifyManager) -> None:
+        self._manager = manager
+        self._attr_unique_id = f"{manager.entry.entry_id}_notify"
+        # Use the configured service name as the entity name so the HA service
+        # is reachable as notify.<notify_service_name>.
+        self._attr_name = manager.notify_service_name
+
+    async def async_send_message(
+        self,
+        message: str,
+        title: str | None = None,
+        target: list[str] | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        """Send a message via S/MIME-capable SMTP."""
+        payload = data or {}
+        html = payload.get("html")
+        if not html:
+            html = f"<p>{html_lib.escape(message)}</p>"
+
+        recipients = list(target or [])
+        if not recipients:
+            default_recipient = str(self._manager.config.get(CONF_DEFAULT_RECIPIENT) or "").strip()
+            if default_recipient:
+                recipients = [default_recipient]
+
+        if not recipients:
+            raise HomeAssistantError(
+                "No target provided and no default_recipient configured"
+            )
+
+        await self._manager._send_message(
+            title=title or "",
+            plaintext=message,
+            html=html,
+            to=recipients,
+            cc=_as_email_list(payload.get("cc")),
+            bcc=_as_email_list(payload.get("bcc")),
+            reply_to=payload.get("reply_to"),
+            attachments=_as_string_list(payload.get("attachments")),
+            extra_headers=_validate_extra_headers(payload.get("headers") or {}),
+            sign=payload.get("sign"),
+            encrypt=payload.get("encrypt"),
+            allow_unencrypted_fallback=payload.get("allow_unencrypted_fallback"),
+            skip_recipients_without_cert=payload.get("skip_recipients_without_cert"),
+            service_context="notify_entity",
+        )

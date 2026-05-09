@@ -1,14 +1,14 @@
 {
   "domain": "smime_notify",
   "name": "S/MIME Notify",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "documentation": "https://github.com/di0nx/ha-smime",
   "issue_tracker": "https://github.com/di0nx/ha-smime/issues",
   "codeowners": [
     "@di0nx"
   ],
   "config_flow": true,
-  "iot_class": "local_push",
+  "iot_class": "cloud_push",
   "requirements": [
     "aiosmtplib>=3.0.1",
     "cryptography>=42.0.0"

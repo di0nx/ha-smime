@@ -7,11 +7,11 @@ import logging
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
     DATA_MANAGER,
-    DEFAULT_NOTIFY_SERVICE_NAME,
     DOMAIN,
     SERVICE_CLEAR_CERTIFICATE_CACHE,
     SERVICE_RELOAD_CERTIFICATES,
@@ -22,6 +22,9 @@ from .const import (
 from .notify import SmimeNotifyManager
 
 _LOGGER = logging.getLogger(__name__)
+
+PLATFORMS = ["notify"]
+
 SERVICE_FIELD_RECIPIENT = "recipient"
 
 SEND_TEST_SCHEMA = vol.Schema(
@@ -46,17 +49,29 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up S/MIME notify from a config entry."""
     manager = SmimeNotifyManager(hass=hass, entry=entry)
-    await manager.async_validate_sender_material()
 
-    notify_service_name = manager.notify_service_name
+    # Try to load sender certificates. If paths are not configured yet or files
+    # are missing, log a warning and continue – sending will fail gracefully
+    # when sign/encrypt is actually attempted.
+    try:
+        await manager.async_validate_sender_material()
+    except HomeAssistantError as err:
+        _LOGGER.warning(
+            "Sender certificate material could not be loaded – signing/encryption "
+            "will be unavailable until this is fixed: %s",
+            err,
+        )
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning(
+            "Unexpected error loading sender certificates: %s",
+            err,
+        )
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         DATA_MANAGER: manager,
-        "notify_service": notify_service_name,
     }
 
-    async def _notify_service_handler(call: ServiceCall) -> None:
-        await manager.async_send_notify_service(call)
-
+    # Register S/MIME-specific domain services (bound to this entry).
     async def _send_test_email(call: ServiceCall) -> None:
         await manager.async_send_test_email(call)
 
@@ -72,7 +87,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _validate_config(call: ServiceCall) -> None:
         await manager.async_validate_config_service()
 
-    hass.services.async_register("notify", notify_service_name, _notify_service_handler)
     hass.services.async_register(
         DOMAIN,
         SERVICE_SEND_TEST_EMAIL,
@@ -101,12 +115,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _validate_config,
     )
 
+    # Forward setup to the notify entity platform.
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
-    _LOGGER.info(
-        "S/MIME Notify ready. Notify service: notify.%s",
-        notify_service_name,
-    )
+    _LOGGER.info("S/MIME Notify loaded (entry_id=%s)", entry.entry_id)
     return True
 
 
@@ -117,23 +131,22 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    data = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-    if not data:
-        return True
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    notify_service_name = data.get("notify_service", DEFAULT_NOTIFY_SERVICE_NAME)
-    hass.services.async_remove("notify", notify_service_name)
+    if unload_ok:
+        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
 
-    if hass.services.has_service(DOMAIN, SERVICE_SEND_TEST_EMAIL):
-        hass.services.async_remove(DOMAIN, SERVICE_SEND_TEST_EMAIL)
-    if hass.services.has_service(DOMAIN, SERVICE_TEST_RECIPIENT_CERTIFICATE):
-        hass.services.async_remove(DOMAIN, SERVICE_TEST_RECIPIENT_CERTIFICATE)
-    if hass.services.has_service(DOMAIN, SERVICE_CLEAR_CERTIFICATE_CACHE):
-        hass.services.async_remove(DOMAIN, SERVICE_CLEAR_CERTIFICATE_CACHE)
-    if hass.services.has_service(DOMAIN, SERVICE_RELOAD_CERTIFICATES):
-        hass.services.async_remove(DOMAIN, SERVICE_RELOAD_CERTIFICATES)
-    if hass.services.has_service(DOMAIN, SERVICE_VALIDATE_CONFIG):
-        hass.services.async_remove(DOMAIN, SERVICE_VALIDATE_CONFIG)
+        # Remove domain services if this was the last entry.
+        if not hass.data.get(DOMAIN):
+            for service in (
+                SERVICE_SEND_TEST_EMAIL,
+                SERVICE_TEST_RECIPIENT_CERTIFICATE,
+                SERVICE_CLEAR_CERTIFICATE_CACHE,
+                SERVICE_RELOAD_CERTIFICATES,
+                SERVICE_VALIDATE_CONFIG,
+            ):
+                if hass.services.has_service(DOMAIN, service):
+                    hass.services.async_remove(DOMAIN, service)
 
-    _LOGGER.debug("S/MIME Notify unloaded for %s", entry.entry_id)
-    return True
+    _LOGGER.debug("S/MIME Notify unloaded for %s (ok=%s)", entry.entry_id, unload_ok)
+    return unload_ok

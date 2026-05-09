@@ -35,7 +35,8 @@
           "remote_allow_insecure_http": "Allow insecure HTTP",
           "remote_timeout": "Remote HTTP timeout (seconds)",
           "remote_cache_ttl_fallback": "Remote cache TTL fallback (seconds)",
-          "smimea_source_enabled": "Enable SMIMEA DNS source"
+          "smimea_source_enabled": "Enable SMIMEA DNS source",
+          "cert_expiry_warning_days": "Certificate expiry warning (days)"
         }
       }
     }

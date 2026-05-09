@@ -6,10 +6,12 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
     CONF_ALLOW_UNENCRYPTED_FALLBACK_DEFAULT,
+    CONF_CERT_EXPIRY_WARNING_DAYS,
     CONF_DEFAULT_RECIPIENT,
     CONF_ENCRYPT_DEFAULT,
     CONF_FILE_TYPES,
@@ -40,8 +42,12 @@ from .const import (
     CONF_SOURCE_ORDER,
     CONF_TLS_VERIFY,
     DEFAULT_ALLOW_UNENCRYPTED_FALLBACK,
+    DEFAULT_CERT_EXPIRY_WARNING_DAYS,
     DEFAULT_ENCRYPT,
+    DEFAULT_FROM_NAME,
     DEFAULT_HASH_MODE,
+    DEFAULT_INCLUDE_CERT_CHAIN,
+    DEFAULT_LOCAL_CERT_DIR,
     DEFAULT_LOCAL_FILE_TYPES,
     DEFAULT_NOTIFY_SERVICE_NAME,
     DEFAULT_SIGN,
@@ -52,6 +58,7 @@ from .const import (
     DOMAIN,
     HASH_MODES,
     SMTP_ENCRYPTION_MODES,
+    SMTP_ENCRYPTION_STARTTLS,
 )
 
 
@@ -79,7 +86,7 @@ def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
             ),
             vol.Required(
                 CONF_SMTP_ENCRYPTION,
-                default=defaults.get(CONF_SMTP_ENCRYPTION, SMTP_ENCRYPTION_MODES[1]),
+                default=defaults.get(CONF_SMTP_ENCRYPTION, SMTP_ENCRYPTION_STARTTLS),
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(options=SMTP_ENCRYPTION_MODES, mode=selector.SelectSelectorMode.DROPDOWN)
             ),
@@ -94,22 +101,22 @@ def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
                 selector.NumberSelectorConfig(min=5, max=300, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(CONF_TLS_VERIFY, default=defaults.get(CONF_TLS_VERIFY, DEFAULT_TLS_VERIFY)): bool,
-            vol.Optional(CONF_FROM_NAME, default=defaults.get(CONF_FROM_NAME, "Home Assistant")): str,
+            vol.Optional(CONF_FROM_NAME, default=defaults.get(CONF_FROM_NAME, DEFAULT_FROM_NAME)): str,
             vol.Required(CONF_FROM_EMAIL, default=defaults.get(CONF_FROM_EMAIL, "")): str,
             vol.Optional(
                 CONF_DEFAULT_RECIPIENT,
                 default=defaults.get(CONF_DEFAULT_RECIPIENT, ""),
             ): str,
             vol.Required(CONF_SIGN_DEFAULT, default=defaults.get(CONF_SIGN_DEFAULT, DEFAULT_SIGN)): bool,
-            vol.Required(CONF_SIGN_CERT_PATH, default=defaults.get(CONF_SIGN_CERT_PATH, "")): str,
-            vol.Required(CONF_SIGN_KEY_PATH, default=defaults.get(CONF_SIGN_KEY_PATH, "")): str,
+            vol.Optional(CONF_SIGN_CERT_PATH, default=defaults.get(CONF_SIGN_CERT_PATH, "")): str,
+            vol.Optional(CONF_SIGN_KEY_PATH, default=defaults.get(CONF_SIGN_KEY_PATH, "")): str,
             vol.Optional(
                 CONF_SIGN_KEY_PASSWORD,
                 default=defaults.get(CONF_SIGN_KEY_PASSWORD, ""),
             ): selector.TextSelector(selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)),
             vol.Required(
                 CONF_INCLUDE_CERT_CHAIN,
-                default=defaults.get(CONF_INCLUDE_CERT_CHAIN, True),
+                default=defaults.get(CONF_INCLUDE_CERT_CHAIN, DEFAULT_INCLUDE_CERT_CHAIN),
             ): bool,
             vol.Required(CONF_ENCRYPT_DEFAULT, default=defaults.get(CONF_ENCRYPT_DEFAULT, DEFAULT_ENCRYPT)): bool,
             vol.Required(
@@ -130,7 +137,7 @@ def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_LOCAL_SOURCE_ENABLED,
                 default=defaults.get(CONF_LOCAL_SOURCE_ENABLED, True),
             ): bool,
-            vol.Required(CONF_LOCAL_CERT_DIR, default=defaults.get(CONF_LOCAL_CERT_DIR, "/ssl/smime/publickeys")): str,
+            vol.Required(CONF_LOCAL_CERT_DIR, default=defaults.get(CONF_LOCAL_CERT_DIR, DEFAULT_LOCAL_CERT_DIR)): str,
             vol.Required(
                 CONF_FILE_TYPES,
                 default=", ".join(defaults.get(CONF_FILE_TYPES, DEFAULT_LOCAL_FILE_TYPES)),
@@ -155,6 +162,12 @@ def _build_schema(defaults: dict[str, Any]) -> vol.Schema:
                 selector.NumberSelectorConfig(min=0, max=86400, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(CONF_SMIMEA_SOURCE_ENABLED, default=defaults.get(CONF_SMIMEA_SOURCE_ENABLED, False)): bool,
+            vol.Required(
+                CONF_CERT_EXPIRY_WARNING_DAYS,
+                default=defaults.get(CONF_CERT_EXPIRY_WARNING_DAYS, DEFAULT_CERT_EXPIRY_WARNING_DAYS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=365, mode=selector.NumberSelectorMode.BOX)
+            ),
         }
     )
 
@@ -188,16 +201,14 @@ class SmimeNotifyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     @staticmethod
-    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+    @config_entries.callback
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> SmimeNotifyOptionsFlow:
         """Get options flow."""
-        return SmimeNotifyOptionsFlow(config_entry)
+        return SmimeNotifyOptionsFlow()
 
 
 class SmimeNotifyOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self._config_entry = config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
@@ -206,7 +217,7 @@ class SmimeNotifyOptionsFlow(config_entries.OptionsFlow):
             data[CONF_SOURCE_ORDER] = ",".join(_split_csv(user_input[CONF_SOURCE_ORDER]))
             return self.async_create_entry(title="", data=data)
 
-        defaults = _merge_entry_data(self._config_entry)
+        defaults = _merge_entry_data(self.config_entry)
         return self.async_show_form(
             step_id="init",
             data_schema=_build_schema(defaults),
