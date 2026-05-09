@@ -793,10 +793,11 @@ class SmimeNotifyEntity(NotifyEntity):
         data: dict[str, Any] | None = None,
     ) -> None:
         """Send a message via S/MIME-capable SMTP."""
+        plaintext = str(message)
         payload = data or {}
         html = payload.get("html")
         if not html:
-            html = f"<p>{html_lib.escape(message)}</p>"
+            html = f"<p>{html_lib.escape(plaintext)}</p>"
 
         recipients = list(target or [])
         if not recipients:
@@ -811,7 +812,7 @@ class SmimeNotifyEntity(NotifyEntity):
 
         await self._manager._send_message(
             title=title or "",
-            plaintext=message,
+            plaintext=plaintext,
             html=html,
             to=recipients,
             cc=_as_email_list(payload.get("cc")),

@@ -61,7 +61,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "will be unavailable until this is fixed: %s",
             err,
         )
-    except Exception as err:  # noqa: BLE001
+    except (OSError, ValueError, TypeError) as err:
         _LOGGER.warning(
             "Unexpected error loading sender certificates: %s",
             err,
