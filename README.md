@@ -1,31 +1,21 @@
 # S/MIME Notify (`smime_notify`)
 
-Home Assistant Custom Integration (HACS-ready) to send SMTP emails with:
-
-- **S/MIME signing** (default on)
-- **optional S/MIME encryption**
-- `notify.smime_signed` action support
-- Configurable local recipient certificate lookup with hash modes
+Home Assistant Custom Integration (HACS-ready) to send SMTP emails with S/MIME signing and optional encryption.
 
 ## Features
 
 - UI setup via Config Flow and Options Flow
+- Recommended UI-friendly service: `smime_notify.send`
+- Classic notify support: `notify.smime_signed`
 - SMTP support: `none`, `STARTTLS`, `SSL/TLS`
-- Required plaintext + HTML mail body (proper multipart/alternative)
-- Optional attachments (`data.attachments`)
-- Per-message controls:
-  - `data.sign`
-  - `data.encrypt`
-  - `data.allow_unencrypted_fallback`
-  - `data.skip_recipients_without_cert`
-- Default recipient fallback when `target` is omitted
-- Local recipient cert lookup with configurable extension order
-- Hash mode support:
-  - `raw_email`
-  - `sha256_email_hex`
-  - `both_raw_then_hash`
-  - `both_hash_then_raw`
+- Required plaintext body with optional HTML body
+- Optional attachments
+- Per-message controls for signing, encryption, fallback behavior, and recipient skipping
+- Default recipient fallback when recipients are omitted
+- Local recipient certificate lookup with configurable file name hash modes
+- SMIMEA DNS recipient certificate lookup with DNS TTL-aware caching
 - Services:
+  - `smime_notify.send`
   - `smime_notify.send_test_email`
   - `smime_notify.test_recipient_certificate`
   - `smime_notify.clear_certificate_cache`
@@ -52,52 +42,69 @@ Configure at least:
 - SMTP username/password (if needed)
 - Sender name/email
 - Signing certificate path + private key path
-- Local public-key directory
-- File type list (for example `pem, crt, cer, der, txt`)
-- Hash mode
+- Local public-key directory and/or SMIMEA source
+- File type list for local public keys, for example `pem, crt, cer, der, txt`
+- Hash mode for local/remote public-key lookup
 
 Optional:
 
 - default recipient
 - sign/encrypt defaults
 - fallback behavior for missing recipient certs
+- source order (`local,smimea,remote`)
 
-## Sign-only example
+Only one config entry is currently supported. Add additional recipients through certificate sources rather than additional integration entries.
+
+## Recommended UI service: `smime_notify.send`
+
+`smime_notify.send` is the preferred Home Assistant action for automations and scripts because `services.yaml` defines user-friendly fields for the UI.
 
 ```yaml
-action: notify.smime_signed
+action: smime_notify.send
 data:
-  title: "Home Assistant Test"
-  message: "Diese E-Mail ist S/MIME signiert."
+  title: "S/MIME Test"
+  message: "Plaintext body"
+  html: "<h1>S/MIME Test</h1><p>HTML body</p>"
   target:
-    - person@example.org
-  data:
-    html: "<h1>Hallo</h1><p>Diese Mail kommt von Home Assistant.</p>"
-    sign: true
-    encrypt: false
+    - dion@kitsos.net
+  sign: true
+  encrypt: true
+  skip_recipients_without_cert: false
+  allow_unencrypted_fallback: false
 ```
 
-## Sign + Encrypt example
+If `target` is omitted, the integration uses the configured default recipient. If both are missing, sending is aborted.
+
+## Classic notify usage: `notify.smime_signed`
+
+`notify.smime_signed` remains available for standard Home Assistant notify workflows. Custom fields go below `data:`.
 
 ```yaml
 action: notify.smime_signed
 data:
-  title: "Secret Home Assistant Report"
-  message: "Fallback Plaintext"
+  title: "S/MIME Test"
+  message: "Plaintext body"
   target:
-    - person@example.org
+    - dion@kitsos.net
   data:
-    html: "<h1>Secret Report</h1>"
+    html: "<h1>S/MIME Test</h1>"
     sign: true
     encrypt: true
-    allow_unencrypted_fallback: false
     skip_recipients_without_cert: false
+    allow_unencrypted_fallback: false
 ```
 
-## Default recipient
+## Recipient certificate test
 
-If `target` is not set, the integration uses the configured default recipient.
-If both are missing, sending is aborted and logged.
+Use this service to verify whether the integration can resolve and validate a recipient certificate before sending encrypted mail:
+
+```yaml
+action: smime_notify.test_recipient_certificate
+data:
+  email: dion@kitsos.net
+```
+
+On success, the Home Assistant log includes the source, certificate subject/issuer, validity period, recipient e-mail addresses, DNS TTL, and DNSSEC AD status when SMIMEA is used.
 
 ## Local public keys
 
@@ -113,46 +120,83 @@ Default extension order:
 - `der`
 - `txt`
 
-## Remote HTTPS public keys
+## Local/remote hash mode
 
-Phase-2 roadmap. Source ordering/settings are already present to keep architecture stable.
-
-## Hash mode
-
-Normalization before hashing:
+The UI hash mode applies only to local file and remote URL lookup. Normalization before hashing:
 
 - trim
 - lowercase
 
-Example:
+Example local/remote full-address hash:
 
 ```bash
 echo -n "person@example.org" | sha256sum
 ```
 
-## SMIMEA
+## SMIMEA DNS lookup
 
-Phase-3 roadmap (DNS-based recipient certificate lookup with TTL-aware caching).
+SMIMEA uses its own RFC-style owner name and does **not** use the UI hash mode.
 
-## Cache behavior
+For an address such as `dion@kitsos.net`:
 
-MVP currently uses in-memory recipient certificate cache (clearable via service).
+1. Split the e-mail address into local-part and domain:
+   - local-part: `dion`
+   - domain: `kitsos.net`
+2. Normalize the local-part:
+   - trim
+   - lowercase
+3. Calculate SHA-256 over the normalized local-part only, not the full e-mail address.
+4. Use the first 28 bytes of the hash, represented as the first 56 hexadecimal characters.
+5. Build the owner name as:
+
+```text
+<first_56_hex_chars_of_sha256_localpart>._smimecert.<domain>
+```
+
+For `dion@kitsos.net`, the name is:
+
+```text
+d55bcf8025bdb22b72cf95c0306748d814c0effe3859bddc00d2b1aa._smimecert.kitsos.net
+```
+
+## Supported SMIMEA record format
+
+The integration supports full DER certificate records of this form:
+
+```text
+SMIMEA 3 0 0 <cert_der_hex>
+```
+
+Meaning:
+
+- `3` = domain-issued certificate
+- `0` = full certificate selector
+- `0` = exact full data matching type
+- `<cert_der_hex>` = complete DER-encoded X.509 recipient certificate
+
+The DER certificate is parsed as X.509 and validated for expiration, recipient e-mail address, and S/MIME `emailProtection` EKU when the EKU extension is present.
+
+## SMIMEA DNSSEC and cache behavior
+
+When dnspython exposes the DNS response flags, the integration logs whether the resolver returned DNSSEC AD (`true`/`false`). If AD status is not available, lookup does not crash; logs show `unknown`.
+
+SMIMEA cache entries use the DNS record TTL. For example, a `300 IN SMIMEA` record is cached for at most 300 seconds. Use `smime_notify.clear_certificate_cache` to clear the in-memory cache manually.
+
+## Remote HTTPS public keys
+
+Remote HTTPS settings are present for architecture compatibility, but the remote source is not implemented yet. If enabled, logs show the sanitized configured base URL and explain that the source is not implemented.
 
 ## Security notes
 
 - Secrets are not logged.
 - Private keys are not exposed in diagnostics.
 - With `encrypt=true`, unencrypted sending is blocked unless explicitly allowed.
-- Custom headers are validated and protected against header injection.
+- Custom headers from notify payloads are validated and protected against header injection.
 
 ## Troubleshooting
 
 - Call `smime_notify.validate_config`
 - Call `smime_notify.test_recipient_certificate`
 - Call `smime_notify.send_test_email`
-- Review Home Assistant logs for cert and SMTP errors
-
-## Known limitations
-
-- MVP phase implemented first: local source + signing/encryption + notify workflow.
-- Remote HTTPS cert source and SMIMEA DNS lookup are not fully implemented yet.
+- Prefer `smime_notify.send` for UI-friendly sending
+- Review Home Assistant logs for the detailed source-by-source certificate lookup trace

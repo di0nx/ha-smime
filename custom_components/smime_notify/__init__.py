@@ -16,6 +16,7 @@ from .const import (
     DOMAIN,
     SERVICE_CLEAR_CERTIFICATE_CACHE,
     SERVICE_RELOAD_CERTIFICATES,
+    SERVICE_SEND,
     SERVICE_SEND_TEST_EMAIL,
     SERVICE_TEST_RECIPIENT_CERTIFICATE,
     SERVICE_VALIDATE_CONFIG,
@@ -27,6 +28,24 @@ from .notify import SmimeNotifyManager
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.NOTIFY]
 SERVICE_FIELD_RECIPIENT = "recipient"
+
+
+SEND_SCHEMA = vol.Schema(
+    {
+        vol.Optional("title", default=""): cv.string,
+        vol.Required("message"): cv.string,
+        vol.Optional("html"): cv.string,
+        vol.Optional("target"): vol.Any(cv.string, [cv.string]),
+        vol.Optional("cc"): vol.Any(cv.string, [cv.string]),
+        vol.Optional("bcc"): vol.Any(cv.string, [cv.string]),
+        vol.Optional("reply_to"): cv.string,
+        vol.Optional("sign"): cv.boolean,
+        vol.Optional("encrypt"): cv.boolean,
+        vol.Optional("allow_unencrypted_fallback"): cv.boolean,
+        vol.Optional("skip_recipients_without_cert"): cv.boolean,
+        vol.Optional("attachments"): vol.Any(cv.string, [cv.string]),
+    }
+)
 
 SEND_TEST_SCHEMA = vol.Schema(
     {
@@ -60,6 +79,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _notify_service_handler(call: ServiceCall) -> None:
         await manager.async_send_notify_service(call)
 
+    async def _send(call: ServiceCall) -> None:
+        await manager.async_send_service(call)
+
     async def _send_test_email(call: ServiceCall) -> None:
         await manager.async_send_test_email(call)
 
@@ -76,6 +98,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await manager.async_validate_config_service()
 
     hass.services.async_register("notify", notify_service_name, _notify_service_handler)
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEND,
+        _send,
+        schema=SEND_SCHEMA,
+    )
     hass.services.async_register(
         DOMAIN,
         SERVICE_SEND_TEST_EMAIL,
@@ -133,6 +161,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     notify_service_name = data.get("notify_service", DEFAULT_NOTIFY_SERVICE_NAME)
     hass.services.async_remove("notify", notify_service_name)
 
+    if hass.services.has_service(DOMAIN, SERVICE_SEND):
+        hass.services.async_remove(DOMAIN, SERVICE_SEND)
     if hass.services.has_service(DOMAIN, SERVICE_SEND_TEST_EMAIL):
         hass.services.async_remove(DOMAIN, SERVICE_SEND_TEST_EMAIL)
     if hass.services.has_service(DOMAIN, SERVICE_TEST_RECIPIENT_CERTIFICATE):

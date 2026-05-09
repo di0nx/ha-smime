@@ -39,6 +39,9 @@
           "smimea_source_enabled": "SMIMEA-DNS-Quelle aktivieren"
         }
       }
+    },
+    "abort": {
+      "single_instance_allowed": "Es ist nur eine S/MIME Notify-Instanz erlaubt."
     }
   },
   "options": {

@@ -258,6 +258,9 @@ class SmimeNotifyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
+        if self._async_current_entries():
+            return self.async_abort(reason="single_instance_allowed")
+
         if user_input is not None:
             data = dict(user_input)
             data[CONF_FILE_TYPES] = _split_csv(user_input[CONF_FILE_TYPES])

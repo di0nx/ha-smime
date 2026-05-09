@@ -39,6 +39,9 @@
           "smimea_source_enabled": "Enable SMIMEA DNS source"
         }
       }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one S/MIME Notify instance is allowed."
     }
   },
   "options": {

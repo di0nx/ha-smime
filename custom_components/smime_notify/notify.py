@@ -8,14 +8,19 @@ import html as html_lib
 import logging
 import mimetypes
 import ssl
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from email.policy import SMTP
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import aiosmtplib
+import dns.exception
+import dns.flags
+import dns.resolver
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
@@ -41,6 +46,11 @@ from .const import (
     CONF_INCLUDE_CERT_CHAIN,
     CONF_LOCAL_CERT_DIR,
     CONF_NOTIFY_SERVICE_NAME,
+    CONF_REMOTE_BASE_URL,
+    CONF_REMOTE_SOURCE_ENABLED,
+    CONF_REMOTE_TIMEOUT,
+    CONF_SMIMEA_SOURCE_ENABLED,
+    CONF_SOURCE_ORDER,
     CONF_SIGN_CERT_PATH,
     CONF_SIGN_DEFAULT,
     CONF_SIGN_KEY_PASSWORD,
@@ -59,6 +69,10 @@ from .const import (
     DEFAULT_FROM_NAME,
     DEFAULT_INCLUDE_CERT_CHAIN,
     DEFAULT_LOCAL_CERT_DIR,
+    DEFAULT_REMOTE_SOURCE_ENABLED,
+    DEFAULT_REMOTE_TIMEOUT,
+    DEFAULT_SMIMEA_SOURCE_ENABLED,
+    DEFAULT_SOURCE_ORDER,
     DEFAULT_SIGN_DEFAULT,
     DEFAULT_SKIP_RECIPIENTS_WITHOUT_CERT_DEFAULT,
     DOMAIN,
@@ -98,6 +112,22 @@ class RecipientCertResult:
     source: str | None
     location: str | None
     error: str | None = None
+    attempted_locations: list[str] | None = None
+    ttl: int | None = None
+    dnssec_ad: bool | None = None
+    smimea_name: str | None = None
+    smimea_usage: int | None = None
+    smimea_selector: int | None = None
+    smimea_matching_type: int | None = None
+    record_count: int | None = None
+
+
+@dataclass
+class CachedRecipientCertResult:
+    """Cached recipient certificate result with optional expiration."""
+
+    result: RecipientCertResult
+    expires_at: float | None
 
 
 @dataclass
@@ -116,7 +146,7 @@ class SmimeNotifyManager:
         self.hass = hass
         self.entry = entry
         self._sender_material: SenderMaterial | None = None
-        self._cert_cache: dict[str, RecipientCertResult] = {}
+        self._cert_cache: dict[str, CachedRecipientCertResult] = {}
 
     @property
     def config(self) -> dict[str, Any]:
@@ -137,6 +167,10 @@ class SmimeNotifyManager:
         merged.setdefault(CONF_INCLUDE_CERT_CHAIN, DEFAULT_INCLUDE_CERT_CHAIN)
         merged.setdefault(CONF_LOCAL_SOURCE_ENABLED, True)
         merged.setdefault(CONF_LOCAL_CERT_DIR, DEFAULT_LOCAL_CERT_DIR)
+        merged.setdefault(CONF_SOURCE_ORDER, DEFAULT_SOURCE_ORDER)
+        merged.setdefault(CONF_SMIMEA_SOURCE_ENABLED, DEFAULT_SMIMEA_SOURCE_ENABLED)
+        merged.setdefault(CONF_REMOTE_SOURCE_ENABLED, DEFAULT_REMOTE_SOURCE_ENABLED)
+        merged.setdefault(CONF_REMOTE_TIMEOUT, DEFAULT_REMOTE_TIMEOUT)
         return merged
 
     @property
@@ -233,10 +267,20 @@ class SmimeNotifyManager:
         result = await self._async_resolve_recipient_certificate(email)
         if not result.certificate:
             _LOGGER.error(
-                "Recipient certificate not found for %s (source=%s, error=%s)",
+                "Recipient certificate not found for %s. Active sources=%s source=%s location=%s error=%s attempted=%s smimea_name=%s records=%s ttl=%s dnssec_ad=%s",
                 email,
+                self._active_source_order(),
                 result.source,
+                result.location,
                 result.error,
+                result.attempted_locations,
+                result.smimea_name,
+                result.record_count,
+                result.ttl,
+                _format_dnssec_ad(result.dnssec_ad),
+            )
+            raise HomeAssistantError(
+                f"No valid recipient certificate found for {email}: {result.error or 'certificate not found'}"
             )
             raise HomeAssistantError(
                 f"No valid recipient certificate found for {email}"
@@ -244,32 +288,78 @@ class SmimeNotifyManager:
 
         cert = result.certificate
         _LOGGER.info(
-            "Recipient certificate found for %s: source=%s location=%s subject=%s issuer=%s expires=%s emails=%s",
+            "Recipient certificate found for %s\n"
+            "Source: %s\n"
+            "SMIMEA name: %s\n"
+            "SMIMEA usage/selector/matching_type: %s/%s/%s\n"
+            "Subject: %s\n"
+            "Issuer: %s\n"
+            "Not valid before: %s\n"
+            "Not valid after: %s\n"
+            "Email addresses: %s\n"
+            "S/MIME suitable: yes\n"
+            "DNS TTL: %s\n"
+            "DNSSEC AD: %s",
             email,
             result.source,
-            result.location,
+            result.smimea_name or "n/a",
+            result.smimea_usage if result.smimea_usage is not None else "n/a",
+            result.smimea_selector if result.smimea_selector is not None else "n/a",
+            result.smimea_matching_type
+            if result.smimea_matching_type is not None
+            else "n/a",
             cert.subject.rfc4514_string(),
             cert.issuer.rfc4514_string(),
+            cert.not_valid_before_utc.isoformat(),
             cert.not_valid_after_utc.isoformat(),
-            _certificate_emails(cert),
+            ", ".join(_certificate_emails(cert)),
+            result.ttl if result.ttl is not None else "n/a",
+            _format_dnssec_ad(result.dnssec_ad),
         )
+
+    async def async_send_service(self, call: ServiceCall) -> None:
+        """Handle smime_notify.send service calls."""
+        await self.async_send_smime_mail(call.data, service_context="send")
 
     async def async_send_notify_service(self, call: ServiceCall) -> None:
         """Handle notify.<service_name> calls."""
         data = call.data
-        title = str(data.get("title") or "")
-        plaintext = str(data.get("message") or "")
         payload = data.get("data") or {}
-        html = payload.get("html")
+        send_payload = {
+            "title": data.get("title"),
+            "message": data.get("message"),
+            "html": payload.get("html"),
+            "target": data.get("target"),
+            "cc": payload.get("cc"),
+            "bcc": payload.get("bcc"),
+            "reply_to": payload.get("reply_to"),
+            "attachments": payload.get("attachments"),
+            "headers": payload.get("headers") or {},
+            "sign": payload.get("sign"),
+            "encrypt": payload.get("encrypt"),
+            "allow_unencrypted_fallback": payload.get("allow_unencrypted_fallback"),
+            "skip_recipients_without_cert": payload.get("skip_recipients_without_cert"),
+        }
+        await self.async_send_smime_mail(send_payload, service_context="notify")
 
+    async def async_send_smime_mail(
+        self, payload: dict[str, Any], *, service_context: str
+    ) -> None:
+        """Normalize service payload and send S/MIME mail."""
+        title = str(payload.get("title") or "")
+        plaintext = str(payload.get("message") or "")
         if not plaintext:
             raise HomeAssistantError("Plaintext body is required")
-        if not html:
-            raise HomeAssistantError("HTML body is required in data.html")
 
-        target = _as_email_list(data.get("target"))
+        html = payload.get("html")
+        if not html:
+            html = f"<p>{html_lib.escape(plaintext)}</p>"
+
+        target = _as_email_list(payload.get("target"))
         if not target:
-            default_recipient = self.config.get(CONF_DEFAULT_RECIPIENT, "").strip()
+            default_recipient = str(
+                self.config.get(CONF_DEFAULT_RECIPIENT, "") or ""
+            ).strip()
             if default_recipient:
                 target = [default_recipient]
             else:
@@ -292,7 +382,7 @@ class SmimeNotifyManager:
             encrypt=payload.get("encrypt"),
             allow_unencrypted_fallback=payload.get("allow_unencrypted_fallback"),
             skip_recipients_without_cert=payload.get("skip_recipients_without_cert"),
-            service_context="notify",
+            service_context=service_context,
         )
 
     async def _send_message(
@@ -638,6 +728,104 @@ class SmimeNotifyManager:
     async def _async_resolve_recipient_certificate(
         self, email: str
     ) -> RecipientCertResult:
+        cached = self._cert_cache.get(email)
+        now = time.monotonic()
+        if cached and (cached.expires_at is None or cached.expires_at > now):
+            _LOGGER.debug(
+                "Recipient certificate cache hit for %s from %s",
+                email,
+                cached.result.source,
+            )
+            return cached.result
+        if cached:
+            _LOGGER.debug("Recipient certificate cache expired for %s", email)
+            self._cert_cache.pop(email, None)
+
+        source_order = self._active_source_order()
+        _LOGGER.debug(
+            "Recipient certificate lookup for %s using sources: %s", email, source_order
+        )
+        failures: list[str] = []
+        last_result: RecipientCertResult | None = None
+
+        for source in source_order:
+            _LOGGER.debug(
+                "Checking recipient certificate source %s for %s", source, email
+            )
+            if source == "local":
+                if not self.config.get(CONF_LOCAL_SOURCE_ENABLED, True):
+                    failures.append("local: disabled")
+                    _LOGGER.debug("Local certificate source disabled for %s", email)
+                    continue
+                result = await self.hass.async_add_executor_job(
+                    self._resolve_recipient_certificate_local, email
+                )
+            elif source == "smimea":
+                if not self.config.get(CONF_SMIMEA_SOURCE_ENABLED, False):
+                    failures.append("smimea: disabled")
+                    _LOGGER.debug("SMIMEA certificate source disabled for %s", email)
+                    continue
+                result = await self.hass.async_add_executor_job(
+                    self._resolve_recipient_certificate_smimea, email
+                )
+            elif source == "remote":
+                if not self.config.get(CONF_REMOTE_SOURCE_ENABLED, False):
+                    failures.append("remote: disabled")
+                    _LOGGER.debug("Remote certificate source disabled for %s", email)
+                    continue
+                result = self._resolve_recipient_certificate_remote(email)
+            else:
+                failures.append(f"{source}: unknown source")
+                _LOGGER.warning("Unknown recipient certificate source %s", source)
+                continue
+
+            last_result = result
+            if result.certificate:
+                expires_at = time.monotonic() + result.ttl if result.ttl else None
+                self._cert_cache[email] = CachedRecipientCertResult(result, expires_at)
+                _LOGGER.debug(
+                    "Recipient certificate found for %s via %s; cache_ttl=%s",
+                    email,
+                    result.source,
+                    result.ttl if result.ttl is not None else "none",
+                )
+                return result
+
+            failures.append(f"{result.source or source}: {result.error or 'not found'}")
+            _LOGGER.debug(
+                "Recipient certificate source %s failed for %s: %s; attempted=%s",
+                result.source or source,
+                email,
+                result.error,
+                result.attempted_locations,
+            )
+
+        error = "; ".join(failures) or "certificate not found"
+        return RecipientCertResult(
+            email=email,
+            certificate=None,
+            source=last_result.source if last_result else None,
+            location=last_result.location if last_result else None,
+            error=error,
+            attempted_locations=last_result.attempted_locations
+            if last_result
+            else None,
+            smimea_name=last_result.smimea_name if last_result else None,
+        )
+
+    def _active_source_order(self) -> list[str]:
+        configured = str(self.config.get(CONF_SOURCE_ORDER, DEFAULT_SOURCE_ORDER) or "")
+        ordered = [
+            item.strip().lower() for item in configured.split(",") if item.strip()
+        ]
+        for source, enabled in (
+            ("local", self.config.get(CONF_LOCAL_SOURCE_ENABLED, True)),
+            ("smimea", self.config.get(CONF_SMIMEA_SOURCE_ENABLED, False)),
+            ("remote", self.config.get(CONF_REMOTE_SOURCE_ENABLED, False)),
+        ):
+            if enabled and source not in ordered:
+                ordered.append(source)
+        return ordered or ["local"]
         if email in self._cert_cache:
             return self._cert_cache[email]
 
@@ -658,6 +846,7 @@ class SmimeNotifyManager:
             )
 
         cert_dir = Path(str(self.config.get(CONF_LOCAL_CERT_DIR) or "").strip())
+        attempted: list[str] = []
         if not cert_dir.exists() or not cert_dir.is_dir():
             return RecipientCertResult(
                 email=email,
@@ -665,6 +854,7 @@ class SmimeNotifyManager:
                 source="local",
                 location=str(cert_dir),
                 error="local cert directory not found",
+                attempted_locations=attempted,
             )
 
         file_types = self._validated_file_types()
@@ -675,6 +865,7 @@ class SmimeNotifyManager:
                 source="local",
                 location=str(cert_dir),
                 error="no file types configured",
+                attempted_locations=attempted,
             )
 
         for name in _candidate_names(
@@ -682,6 +873,7 @@ class SmimeNotifyManager:
         ):
             for file_type in file_types:
                 candidate = cert_dir / f"{name}.{file_type}"
+                attempted.append(str(candidate))
                 if not candidate.is_file():
                     continue
                 try:
@@ -694,12 +886,14 @@ class SmimeNotifyManager:
                         source="local",
                         location=str(candidate),
                         error=str(err),
+                        attempted_locations=attempted,
                     )
                 return RecipientCertResult(
                     email=email,
                     certificate=cert,
                     source="local",
                     location=str(candidate),
+                    attempted_locations=attempted,
                 )
 
         return RecipientCertResult(
@@ -708,6 +902,179 @@ class SmimeNotifyManager:
             source="local",
             location=str(cert_dir),
             error="certificate not found",
+            attempted_locations=attempted,
+        )
+
+    def _resolve_recipient_certificate_smimea(self, email: str) -> RecipientCertResult:
+        smimea_name = _build_smimea_owner_name(email)
+        timeout = float(self.config.get(CONF_REMOTE_TIMEOUT, DEFAULT_REMOTE_TIMEOUT))
+        resolver = dns.resolver.Resolver()
+        resolver.lifetime = timeout
+        resolver.timeout = timeout
+        resolver.use_edns(edns=0, ednsflags=dns.flags.DO)
+        resolver_description = ",".join(resolver.nameservers) or "system resolver"
+        _LOGGER.debug(
+            "SMIMEA lookup for %s querying %s with resolver %s",
+            email,
+            smimea_name,
+            resolver_description,
+        )
+
+        try:
+            answer = resolver.resolve(smimea_name, "SMIMEA", raise_on_no_answer=False)
+        except dns.resolver.NXDOMAIN:
+            _LOGGER.debug("SMIMEA name %s does not exist", smimea_name)
+            return RecipientCertResult(
+                email=email,
+                certificate=None,
+                source="smimea",
+                location=smimea_name,
+                error=f"SMIMEA name queried was wrong or not found: {smimea_name}",
+                attempted_locations=[smimea_name],
+                smimea_name=smimea_name,
+            )
+        except dns.resolver.NoNameservers as err:
+            return RecipientCertResult(
+                email=email,
+                certificate=None,
+                source="smimea",
+                location=smimea_name,
+                error=f"SMIMEA lookup failed: no usable nameservers ({err})",
+                attempted_locations=[smimea_name],
+                smimea_name=smimea_name,
+            )
+        except dns.exception.DNSException as err:
+            return RecipientCertResult(
+                email=email,
+                certificate=None,
+                source="smimea",
+                location=smimea_name,
+                error=f"SMIMEA lookup failed: {err}",
+                attempted_locations=[smimea_name],
+                smimea_name=smimea_name,
+            )
+
+        ttl = int(answer.rrset.ttl) if answer.rrset is not None else None
+        record_count = len(answer) if answer.rrset is not None else 0
+        dnssec_ad = None
+        if getattr(answer, "response", None) is not None:
+            dnssec_ad = bool(answer.response.flags & dns.flags.AD)
+            _LOGGER.debug(
+                "SMIMEA lookup for %s returned AD=%s", email, str(dnssec_ad).lower()
+            )
+        else:
+            _LOGGER.warning(
+                "SMIMEA lookup for %s did not expose DNSSEC AD status", email
+            )
+
+        _LOGGER.debug(
+            "SMIMEA lookup for %s name=%s found_records=%s ttl=%s",
+            email,
+            smimea_name,
+            record_count,
+            ttl,
+        )
+
+        if record_count == 0:
+            return RecipientCertResult(
+                email=email,
+                certificate=None,
+                source="smimea",
+                location=smimea_name,
+                error="SMIMEA record not found",
+                attempted_locations=[smimea_name],
+                ttl=ttl,
+                dnssec_ad=dnssec_ad,
+                smimea_name=smimea_name,
+                record_count=0,
+            )
+
+        unsupported: list[str] = []
+        for rdata in answer:
+            usage = int(rdata.usage)
+            selector = int(rdata.selector)
+            matching_type = int(rdata.mtype)
+            _LOGGER.debug(
+                "SMIMEA record for %s usage/selector/matching_type=%s/%s/%s data_len=%s",
+                email,
+                usage,
+                selector,
+                matching_type,
+                len(rdata.cert),
+            )
+            try:
+                cert = _certificate_from_smimea_record_data(
+                    usage, selector, matching_type, bytes(rdata.cert)
+                )
+                _LOGGER.debug(
+                    "SMIMEA DER parsing succeeded for %s from %s", email, smimea_name
+                )
+                _validate_recipient_certificate(cert, email)
+            except HomeAssistantError as err:
+                _LOGGER.debug(
+                    "SMIMEA certificate rejected for %s from %s: %s",
+                    email,
+                    smimea_name,
+                    err,
+                )
+                unsupported.append(f"{usage}/{selector}/{matching_type}: {err}")
+                continue
+            except Exception as err:
+                _LOGGER.debug(
+                    "SMIMEA record found but certificate DER parsing failed for %s from %s: %s",
+                    email,
+                    smimea_name,
+                    err,
+                )
+                unsupported.append(
+                    f"{usage}/{selector}/{matching_type}: SMIMEA record found but certificate DER parsing failed: {err}"
+                )
+                continue
+
+            return RecipientCertResult(
+                email=email,
+                certificate=cert,
+                source="smimea",
+                location=smimea_name,
+                attempted_locations=[smimea_name],
+                ttl=ttl,
+                dnssec_ad=dnssec_ad,
+                smimea_name=smimea_name,
+                smimea_usage=usage,
+                smimea_selector=selector,
+                smimea_matching_type=matching_type,
+                record_count=record_count,
+            )
+
+        return RecipientCertResult(
+            email=email,
+            certificate=None,
+            source="smimea",
+            location=smimea_name,
+            error="; ".join(unsupported) or "no usable SMIMEA records found",
+            attempted_locations=[smimea_name],
+            ttl=ttl,
+            dnssec_ad=dnssec_ad,
+            smimea_name=smimea_name,
+            record_count=record_count,
+        )
+
+    def _resolve_recipient_certificate_remote(self, email: str) -> RecipientCertResult:
+        base_url = str(self.config.get(CONF_REMOTE_BASE_URL) or "").strip()
+        sanitized_url = _sanitize_url_for_log(base_url) if base_url else ""
+        attempted = [sanitized_url] if sanitized_url else []
+        _LOGGER.debug(
+            "Remote recipient certificate source for %s is configured but not implemented; base_url_configured=%s",
+            email,
+            bool(base_url),
+        )
+        return RecipientCertResult(
+            email=email,
+            certificate=None,
+            source="remote",
+            location=sanitized_url or None,
+            error="remote certificate source is not implemented yet",
+            attempted_locations=attempted,
         )
 
     def _validated_file_types(self) -> list[str]:
@@ -748,6 +1115,8 @@ class SmimeNotifyEntity(NotifyEntity):
 
     async def async_send_message(self, message: str, title: str | None = None) -> None:
         """Send a notification message through the configured S/MIME mailer."""
+        await self._manager.async_send_smime_mail(
+            {"title": title or "", "message": message}, service_context="notify_entity"
         html = f"<p>{html_lib.escape(message)}</p>"
         default_recipient = str(
             self._manager.config.get(CONF_DEFAULT_RECIPIENT, "")
@@ -776,8 +1145,44 @@ def _normalize_email(email: str) -> str:
     return str(email).strip().lower()
 
 
+def _format_dnssec_ad(value: bool | None) -> str:
+    if value is None:
+        return "unknown"
+    return str(value).lower()
+
+
 def _sha256_email(email: str) -> str:
     return hashlib.sha256(email.encode("utf-8")).hexdigest()
+
+
+def _build_smimea_owner_name(email: str) -> str:
+    """Build the RFC 8162 SMIMEA owner name for an email address."""
+    normalized = _normalize_email(email)
+    if "@" not in normalized:
+        raise HomeAssistantError("Invalid email address for SMIMEA lookup")
+    local_part, domain = normalized.rsplit("@", 1)
+    local_part = local_part.strip().lower()
+    domain = domain.strip().lower().rstrip(".")
+    if not local_part or not domain:
+        raise HomeAssistantError("Invalid email address for SMIMEA lookup")
+    local_hash = hashlib.sha256(local_part.encode("utf-8")).hexdigest()[:56]
+    return f"{local_hash}._smimecert.{domain}"
+
+
+def _certificate_from_smimea_record_data(
+    usage: int, selector: int, matching_type: int, cert_data: bytes
+) -> x509.Certificate:
+    """Return a certificate from supported SMIMEA certificate association data."""
+    if usage != 3 or selector != 0 or matching_type != 0:
+        raise HomeAssistantError(
+            f"Unsupported SMIMEA usage/selector/matching_type: {usage}/{selector}/{matching_type}"
+        )
+    try:
+        return x509.load_der_x509_certificate(cert_data)
+    except Exception as err:
+        raise HomeAssistantError(
+            "SMIMEA record found but certificate DER parsing failed"
+        ) from err
 
 
 def _candidate_names(email: str, hash_mode: str) -> list[str]:
@@ -810,6 +1215,16 @@ def _as_string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return []
+
+
+def _sanitize_url_for_log(url: str) -> str:
+    parsed = urlsplit(url)
+    if not parsed.username and not parsed.password:
+        return url
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
 
 
 def _validate_extra_headers(headers: dict[str, Any]) -> dict[str, str]:
