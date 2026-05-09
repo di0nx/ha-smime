@@ -8,6 +8,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
@@ -62,8 +63,8 @@ TEST_RECIPIENT_CERT_SCHEMA = vol.Schema({vol.Required("email"): cv.string})
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up integration from yaml (not used)."""
-    return True
+    """Set up global S/MIME Notify services."""
+    hass.data.setdefault(DOMAIN, {})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -83,21 +84,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await manager.async_send_service(call)
 
     async def _send_test_email(call: ServiceCall) -> None:
-        await manager.async_send_test_email(call)
+        await _async_get_manager(hass).async_send_test_email(call)
 
     async def _test_recipient_certificate(call: ServiceCall) -> None:
-        await manager.async_test_recipient_certificate(call)
+        await _async_get_manager(hass).async_test_recipient_certificate(call)
 
     async def _clear_certificate_cache(call: ServiceCall) -> None:
-        await manager.async_clear_certificate_cache()
+        await _async_get_manager(hass).async_clear_certificate_cache()
 
     async def _reload_certificates(call: ServiceCall) -> None:
-        await manager.async_reload_certificates()
+        await _async_get_manager(hass).async_reload_certificates()
 
     async def _validate_config(call: ServiceCall) -> None:
-        await manager.async_validate_config_service()
+        await _async_get_manager(hass).async_validate_config_service()
 
-    hass.services.async_register("notify", notify_service_name, _notify_service_handler)
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEND,
+        _send,
+        schema=SEND_SCHEMA,
+    )
     hass.services.async_register(
         DOMAIN,
         SERVICE_SEND,
@@ -131,6 +137,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         SERVICE_VALIDATE_CONFIG,
         _validate_config,
     )
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up S/MIME notify from a config entry."""
+    manager = SmimeNotifyManager(hass=hass, entry=entry)
+
+    notify_service_name = manager.notify_service_name
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        DATA_MANAGER: manager,
+        "notify_service": notify_service_name,
+    }
+
+    async def _notify_service_handler(call: ServiceCall) -> None:
+        await manager.async_send_notify_service(call)
+
+    hass.services.async_register("notify", notify_service_name, _notify_service_handler)
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -141,6 +166,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         notify_service_name,
     )
     return True
+
+
+def _async_get_manager(hass: HomeAssistant) -> SmimeNotifyManager:
+    """Return the loaded manager for the single supported config entry."""
+    for entry_data in hass.data.get(DOMAIN, {}).values():
+        manager = entry_data.get(DATA_MANAGER)
+        if manager is not None:
+            return manager
+    raise HomeAssistantError(
+        "S/MIME Notify is not loaded. Add or reload the integration before calling this action."
+    )
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
