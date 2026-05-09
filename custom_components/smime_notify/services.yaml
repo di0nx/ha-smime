@@ -1,0 +1,54 @@
+send_test_email:
+  name: Send test S/MIME email
+  description: Send a test email with optional signing/encryption.
+  fields:
+    recipient:
+      required: true
+      example: person@example.org
+      selector:
+        text:
+    subject:
+      required: false
+      example: Home Assistant test
+      selector:
+        text:
+    message:
+      required: false
+      example: Plaintext body
+      selector:
+        text:
+    html:
+      required: false
+      example: "<h1>HTML body</h1>"
+      selector:
+        text:
+    sign:
+      required: false
+      selector:
+        boolean:
+    encrypt:
+      required: false
+      selector:
+        boolean:
+
+test_recipient_certificate:
+  name: Test recipient certificate
+  description: Resolve and validate recipient S/MIME certificate.
+  fields:
+    email:
+      required: true
+      example: person@example.org
+      selector:
+        text:
+
+clear_certificate_cache:
+  name: Clear certificate cache
+  description: Clear in-memory certificate caches.
+
+reload_certificates:
+  name: Reload certificates
+  description: Reload signing certificate and private key from configured paths.
+
+validate_config:
+  name: Validate config
+  description: Validate SMTP and certificate configuration.
