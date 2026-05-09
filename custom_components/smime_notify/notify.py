@@ -170,7 +170,7 @@ class SmimeNotifyManager:
         sign = call.data.get("sign")
         encrypt = call.data.get("encrypt")
 
-        _LOGGER.info("Running SMTP/S-MIME test for recipient %s", recipient)
+        _LOGGER.info("Running SMTP/S/MIME test for recipient %s", recipient)
         await self._send_message(
             title=subject,
             plaintext=message,
