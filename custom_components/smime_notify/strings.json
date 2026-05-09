@@ -22,6 +22,7 @@
           "sign_key_path": "Private key path",
           "sign_key_password": "Private key password",
           "include_cert_chain": "Include certificate chain",
+          "cert_expiry_warning_days": "Certificate expiry warning days",
           "encrypt_default": "Encrypt by default",
           "allow_unencrypted_fallback_default": "Allow unencrypted fallback",
           "skip_recipients_without_cert_default": "Skip recipients without certificate",

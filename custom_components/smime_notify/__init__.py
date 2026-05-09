@@ -6,6 +6,7 @@ import logging
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
@@ -18,10 +19,13 @@ from .const import (
     SERVICE_SEND_TEST_EMAIL,
     SERVICE_TEST_RECIPIENT_CERTIFICATE,
     SERVICE_VALIDATE_CONFIG,
+    SMTP_ENCRYPTION_SSL,
+    SMTP_ENCRYPTION_SSL_LEGACY,
 )
 from .notify import SmimeNotifyManager
 
 _LOGGER = logging.getLogger(__name__)
+PLATFORMS: list[Platform] = [Platform.NOTIFY]
 SERVICE_FIELD_RECIPIENT = "recipient"
 
 SEND_TEST_SCHEMA = vol.Schema(
@@ -46,7 +50,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up S/MIME notify from a config entry."""
     manager = SmimeNotifyManager(hass=hass, entry=entry)
-    await manager.async_validate_sender_material()
 
     notify_service_name = manager.notify_service_name
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
@@ -101,6 +104,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _validate_config,
     )
 
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     _LOGGER.info(
@@ -117,6 +122,10 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
+
     data = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if not data:
         return True
@@ -136,4 +145,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_VALIDATE_CONFIG)
 
     _LOGGER.debug("S/MIME Notify unloaded for %s", entry.entry_id)
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old config entries."""
+    if entry.data.get("smtp_encryption") != SMTP_ENCRYPTION_SSL_LEGACY:
+        return True
+
+    data = {**entry.data, "smtp_encryption": SMTP_ENCRYPTION_SSL}
+    hass.config_entries.async_update_entry(entry, data=data)
     return True
