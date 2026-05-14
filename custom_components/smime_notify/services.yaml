@@ -1,43 +1,170 @@
+send:
+  name: Send S/MIME email
+  description: UI-friendly service to send an S/MIME email using this integration.
+  fields:
+    title:
+      name: Subject
+      description: E-mail subject.
+      required: false
+      example: S/MIME Test
+      selector:
+        text:
+    message:
+      name: Plaintext content
+      description: Plaintext body content.
+      required: true
+      example: Plaintext body
+      selector:
+        text:
+          multiline: true
+    html:
+      name: HTML content
+      description: HTML body content. If omitted, a simple escaped HTML body is generated from the plaintext message.
+      required: false
+      example: "<h1>S/MIME Test</h1><p>HTML body</p>"
+      selector:
+        text:
+          multiline: true
+    target:
+      name: Recipients
+      description: Recipient e-mail address or list of addresses. If empty, the configured default recipient is used.
+      required: false
+      example:
+        - dion@kitsos.net
+      selector:
+        object:
+    cc:
+      name: CC recipients
+      description: CC e-mail address or list of addresses.
+      required: false
+      selector:
+        object:
+    bcc:
+      name: BCC recipients
+      description: BCC e-mail address or list of addresses.
+      required: false
+      selector:
+        object:
+    reply_to:
+      name: Reply-To
+      description: Reply-To e-mail address.
+      required: false
+      selector:
+        text:
+    sign:
+      name: Sign
+      description: Override the integration default for S/MIME signing.
+      required: false
+      selector:
+        boolean:
+    encrypt:
+      name: Encrypt
+      description: Override the integration default for S/MIME encryption.
+      required: false
+      selector:
+        boolean:
+    allow_unencrypted_fallback:
+      name: Allow unencrypted fallback
+      description: Override whether sending may continue unencrypted if recipient certificates are missing.
+      required: false
+      selector:
+        boolean:
+    skip_recipients_without_cert:
+      name: Skip recipients without certificate
+      description: Override whether recipients without certificates are skipped when encryption is enabled.
+      required: false
+      selector:
+        boolean:
+    attachments:
+      name: Attachments
+      description: File path or list of file paths to attach.
+      required: false
+      example:
+        - /config/www/report.pdf
+      selector:
+        object:
+    sender_identity:
+      name: Sender identity
+      description: Optional sender identity ID from this integration instance, for example default or alerts.
+      required: false
+      example: default
+      selector:
+        text:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:
+
 send_test_email:
   name: Send test S/MIME email
   description: Send a test email with optional signing/encryption.
   fields:
     recipient:
+      name: Recipient
+      description: Recipient e-mail address.
       required: true
       example: person@example.org
       selector:
         text:
     subject:
+      name: Subject
+      description: E-mail subject.
       required: false
       example: Home Assistant test
       selector:
         text:
     message:
+      name: Plaintext content
+      description: Plaintext body content.
       required: false
       example: Plaintext body
       selector:
         text:
+          multiline: true
     html:
+      name: HTML content
+      description: HTML body content.
       required: false
       example: "<h1>HTML body</h1>"
       selector:
         text:
+          multiline: true
     sign:
+      name: Sign
+      description: Override the integration default for S/MIME signing.
       required: false
       selector:
         boolean:
     encrypt:
+      name: Encrypt
+      description: Override the integration default for S/MIME encryption.
       required: false
       selector:
         boolean:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:
 
 test_recipient_certificate:
   name: Test recipient certificate
   description: Resolve and validate recipient S/MIME certificate.
   fields:
     email:
+      name: E-mail address
+      description: Recipient e-mail address to resolve.
       required: true
       example: person@example.org
+      selector:
+        text:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
       selector:
         text:
 
@@ -45,10 +172,34 @@ clear_certificate_cache:
   name: Clear certificate cache
   description: Clear in-memory certificate caches.
 
+  fields:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:
+
 reload_certificates:
   name: Reload certificates
   description: Reload signing certificate and private key from configured paths.
 
+  fields:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:
+
 validate_config:
   name: Validate config
   description: Validate SMTP and certificate configuration.
+
+  fields:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:

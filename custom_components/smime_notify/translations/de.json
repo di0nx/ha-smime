@@ -22,6 +22,7 @@
           "sign_key_path": "Pfad privater Schlüssel",
           "sign_key_password": "Passwort privater Schlüssel",
           "include_cert_chain": "Zertifikatskette einbeziehen",
+          "cert_expiry_warning_days": "Warnung vor Zertifikatsablauf (Tage)",
           "encrypt_default": "Standardmäßig verschlüsseln",
           "allow_unencrypted_fallback_default": "Unverschlüsselten Fallback erlauben",
           "skip_recipients_without_cert_default": "Empfänger ohne Zertifikat überspringen",
@@ -35,9 +36,127 @@
           "remote_allow_insecure_http": "Unsicheres HTTP erlauben",
           "remote_timeout": "Remote-HTTP-Timeout (Sekunden)",
           "remote_cache_ttl_fallback": "Remote-Cache-TTL-Fallback (Sekunden)",
-          "smimea_source_enabled": "SMIMEA-DNS-Quelle aktivieren"
+          "smimea_source_enabled": "SMIMEA-DNS-Quelle aktivieren",
+          "sender_identities": "Absenderidentitäten (id|Name|E-Mail, eine pro Zeile)"
+        }
+      },
+      "sender": {
+        "title": "Absenderidentitäten",
+        "description": "Standard-Absender und optionale Identitäten konfigurieren.",
+        "data": {
+          "notify_service_name": "Notify-Service-Name",
+          "smtp_host": "SMTP-Host",
+          "smtp_port": "SMTP-Port",
+          "smtp_encryption": "SMTP-Verschlüsselung",
+          "smtp_username": "SMTP-Benutzername",
+          "smtp_password": "SMTP-Passwort",
+          "smtp_timeout": "SMTP-Timeout (Sekunden)",
+          "tls_verify": "TLS-Zertifikat prüfen",
+          "from_name": "Absendername",
+          "from_email": "Absender-E-Mail",
+          "default_recipient": "Standardempfänger",
+          "sign_default": "Standardmäßig signieren",
+          "sign_cert_path": "Pfad Signing-Zertifikat",
+          "sign_key_path": "Pfad privater Schlüssel",
+          "sign_key_password": "Passwort privater Schlüssel",
+          "include_cert_chain": "Zertifikatskette einbeziehen",
+          "cert_expiry_warning_days": "Warnung vor Zertifikatsablauf (Tage)",
+          "encrypt_default": "Standardmäßig verschlüsseln",
+          "allow_unencrypted_fallback_default": "Unverschlüsselten Fallback erlauben",
+          "skip_recipients_without_cert_default": "Empfänger ohne Zertifikat überspringen",
+          "local_source_enabled": "Lokale Zertifikatsquelle aktivieren",
+          "local_cert_dir": "Lokales Empfänger-Zertifikatsverzeichnis",
+          "file_types": "Zertifikats-Dateitypen (Komma-getrennt)",
+          "hash_mode": "Hash-Modus Empfängersuche",
+          "source_order": "Quellenreihenfolge (Komma-getrennt)",
+          "remote_source_enabled": "Remote-HTTPS-Quelle aktivieren",
+          "remote_base_url": "Remote-HTTPS-Basis-URL",
+          "remote_allow_insecure_http": "Unsicheres HTTP erlauben",
+          "remote_timeout": "Remote-HTTP-Timeout (Sekunden)",
+          "remote_cache_ttl_fallback": "Remote-Cache-TTL-Fallback (Sekunden)",
+          "smimea_source_enabled": "SMIMEA-DNS-Quelle aktivieren",
+          "sender_identities": "Absenderidentitäten (id|Name|E-Mail, eine pro Zeile)"
+        }
+      },
+      "smime": {
+        "title": "S/MIME-Material",
+        "description": "Signatur- und Verschlüsselungsstandardwerte konfigurieren.",
+        "data": {
+          "notify_service_name": "Notify-Service-Name",
+          "smtp_host": "SMTP-Host",
+          "smtp_port": "SMTP-Port",
+          "smtp_encryption": "SMTP-Verschlüsselung",
+          "smtp_username": "SMTP-Benutzername",
+          "smtp_password": "SMTP-Passwort",
+          "smtp_timeout": "SMTP-Timeout (Sekunden)",
+          "tls_verify": "TLS-Zertifikat prüfen",
+          "from_name": "Absendername",
+          "from_email": "Absender-E-Mail",
+          "default_recipient": "Standardempfänger",
+          "sign_default": "Standardmäßig signieren",
+          "sign_cert_path": "Pfad Signing-Zertifikat",
+          "sign_key_path": "Pfad privater Schlüssel",
+          "sign_key_password": "Passwort privater Schlüssel",
+          "include_cert_chain": "Zertifikatskette einbeziehen",
+          "cert_expiry_warning_days": "Warnung vor Zertifikatsablauf (Tage)",
+          "encrypt_default": "Standardmäßig verschlüsseln",
+          "allow_unencrypted_fallback_default": "Unverschlüsselten Fallback erlauben",
+          "skip_recipients_without_cert_default": "Empfänger ohne Zertifikat überspringen",
+          "local_source_enabled": "Lokale Zertifikatsquelle aktivieren",
+          "local_cert_dir": "Lokales Empfänger-Zertifikatsverzeichnis",
+          "file_types": "Zertifikats-Dateitypen (Komma-getrennt)",
+          "hash_mode": "Hash-Modus Empfängersuche",
+          "source_order": "Quellenreihenfolge (Komma-getrennt)",
+          "remote_source_enabled": "Remote-HTTPS-Quelle aktivieren",
+          "remote_base_url": "Remote-HTTPS-Basis-URL",
+          "remote_allow_insecure_http": "Unsicheres HTTP erlauben",
+          "remote_timeout": "Remote-HTTP-Timeout (Sekunden)",
+          "remote_cache_ttl_fallback": "Remote-Cache-TTL-Fallback (Sekunden)",
+          "smimea_source_enabled": "SMIMEA-DNS-Quelle aktivieren",
+          "sender_identities": "Absenderidentitäten (id|Name|E-Mail, eine pro Zeile)"
+        }
+      },
+      "sources": {
+        "title": "Empfänger-Zertifikatsquellen",
+        "description": "Lokale, SMIMEA- und Remote-Suche konfigurieren.",
+        "data": {
+          "notify_service_name": "Notify-Service-Name",
+          "smtp_host": "SMTP-Host",
+          "smtp_port": "SMTP-Port",
+          "smtp_encryption": "SMTP-Verschlüsselung",
+          "smtp_username": "SMTP-Benutzername",
+          "smtp_password": "SMTP-Passwort",
+          "smtp_timeout": "SMTP-Timeout (Sekunden)",
+          "tls_verify": "TLS-Zertifikat prüfen",
+          "from_name": "Absendername",
+          "from_email": "Absender-E-Mail",
+          "default_recipient": "Standardempfänger",
+          "sign_default": "Standardmäßig signieren",
+          "sign_cert_path": "Pfad Signing-Zertifikat",
+          "sign_key_path": "Pfad privater Schlüssel",
+          "sign_key_password": "Passwort privater Schlüssel",
+          "include_cert_chain": "Zertifikatskette einbeziehen",
+          "cert_expiry_warning_days": "Warnung vor Zertifikatsablauf (Tage)",
+          "encrypt_default": "Standardmäßig verschlüsseln",
+          "allow_unencrypted_fallback_default": "Unverschlüsselten Fallback erlauben",
+          "skip_recipients_without_cert_default": "Empfänger ohne Zertifikat überspringen",
+          "local_source_enabled": "Lokale Zertifikatsquelle aktivieren",
+          "local_cert_dir": "Lokales Empfänger-Zertifikatsverzeichnis",
+          "file_types": "Zertifikats-Dateitypen (Komma-getrennt)",
+          "hash_mode": "Hash-Modus Empfängersuche",
+          "source_order": "Quellenreihenfolge (Komma-getrennt)",
+          "remote_source_enabled": "Remote-HTTPS-Quelle aktivieren",
+          "remote_base_url": "Remote-HTTPS-Basis-URL",
+          "remote_allow_insecure_http": "Unsicheres HTTP erlauben",
+          "remote_timeout": "Remote-HTTP-Timeout (Sekunden)",
+          "remote_cache_ttl_fallback": "Remote-Cache-TTL-Fallback (Sekunden)",
+          "smimea_source_enabled": "SMIMEA-DNS-Quelle aktivieren",
+          "sender_identities": "Absenderidentitäten (id|Name|E-Mail, eine pro Zeile)"
         }
       }
+    },
+    "abort": {
+      "single_instance_allowed": "Es ist nur eine S/MIME Notify-Instanz erlaubt."
     }
   },
   "options": {
@@ -47,5 +166,6 @@
         "description": "SMTP- und S/MIME-Einstellungen aktualisieren"
       }
     }
-  }
+  },
+  "services": {}
 }
