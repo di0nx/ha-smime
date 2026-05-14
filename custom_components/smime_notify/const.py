@@ -17,6 +17,7 @@ CONF_TLS_VERIFY = "tls_verify"
 CONF_FROM_NAME = "from_name"
 CONF_FROM_EMAIL = "from_email"
 CONF_DEFAULT_RECIPIENT = "default_recipient"
+CONF_SENDER_IDENTITIES = "sender_identities"
 
 CONF_SIGN_DEFAULT = "sign_default"
 CONF_SIGN_CERT_PATH = "sign_cert_path"

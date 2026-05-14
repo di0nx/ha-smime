@@ -6,7 +6,6 @@ Home Assistant Custom Integration (HACS-ready) to send SMTP emails with S/MIME s
 
 - UI setup via Config Flow and Options Flow
 - Recommended UI-friendly service: `smime_notify.send`
-- Classic notify support: `notify.smime_signed`
 - SMTP support: `none`, `STARTTLS`, `SSL/TLS`
 - Required plaintext body with optional HTML body
 - Optional attachments
@@ -53,7 +52,9 @@ Optional:
 - fallback behavior for missing recipient certs
 - source order (`local,smimea,remote`)
 
-Only one config entry is currently supported. Add additional recipients through certificate sources rather than additional integration entries.
+Multiple config entries are supported. If more than one S/MIME Notify instance is loaded, pass `config_entry_id` to `smime_notify.send` so the service knows which SMTP/S/MIME configuration to use.
+
+Sender identities are configured per instance. Use one line per identity in the setup flow: `id|Display Name|sender@example.org`. The first/default identity is used when `sender_identity` is omitted.
 
 ## Recommended UI service: `smime_notify.send`
 
@@ -69,30 +70,22 @@ data:
     - dion@kitsos.net
   sign: true
   encrypt: true
+  sender_identity: default
+  # config_entry_id is required if multiple S/MIME Notify instances are loaded
+  # config_entry_id: "01J..."
   skip_recipients_without_cert: false
   allow_unencrypted_fallback: false
 ```
 
 If `target` is omitted, the integration uses the configured default recipient. If both are missing, sending is aborted.
 
-## Classic notify usage: `notify.smime_signed`
+## Classic notify service removed
 
-`notify.smime_signed` remains available for standard Home Assistant notify workflows. Custom fields go below `data:`.
+The previous dynamic `notify.smime_signed` path has been disabled because it was unreliable in Home Assistant. Use `smime_notify.send` instead; it exposes the same S/MIME options with explicit UI fields.
 
-```yaml
-action: notify.smime_signed
-data:
-  title: "S/MIME Test"
-  message: "Plaintext body"
-  target:
-    - dion@kitsos.net
-  data:
-    html: "<h1>S/MIME Test</h1>"
-    sign: true
-    encrypt: true
-    skip_recipients_without_cert: false
-    allow_unencrypted_fallback: false
-```
+## Sign and encrypt behavior
+
+When both `sign: true` and `encrypt: true` are set, the integration now signs the MIME message first and then encrypts the signed S/MIME MIME part. Recipients should see a decrypted message that still contains the S/MIME signature instead of an encrypted-only message.
 
 ## Recipient certificate test
 
@@ -181,6 +174,18 @@ The DER certificate is parsed as X.509 and validated for expiration, recipient e
 When dnspython exposes the DNS response flags, the integration logs whether the resolver returned DNSSEC AD (`true`/`false`). If AD status is not available, lookup does not crash; logs show `unknown`.
 
 SMIMEA cache entries use the DNS record TTL. For example, a `300 IN SMIMEA` record is cached for at most 300 seconds. Use `smime_notify.clear_certificate_cache` to clear the in-memory cache manually.
+
+## S/MIME encryption limitation
+
+The current Python `cryptography` PKCS7 backend supports only RSA recipient certificates for S/MIME encryption. EC/ECDSA certificates may be perfectly valid as S/MIME identity/signing certificates, but they cannot currently be used as recipient encryption certificates by this backend.
+
+If a recipient certificate uses EC, Ed25519, Ed448, DSA, or another non-RSA public key and `encrypt=true`, the integration now fails before calling the PKCS7 backend and reports a clear Home Assistant error instead of crashing with a raw stack trace.
+
+Workarounds:
+
+- Publish/use an RSA S/MIME certificate for recipients that should receive encrypted mail.
+- Use `allow_unencrypted_fallback: true` only if sending unencrypted is acceptable for that message. This logs a warning and does not silently downgrade.
+- Future improvement: add an optional OpenSSL CLI/CMS backend for broader recipient key support.
 
 ## Remote HTTPS public keys
 

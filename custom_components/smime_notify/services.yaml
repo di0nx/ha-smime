@@ -83,6 +83,19 @@ send:
         - /config/www/report.pdf
       selector:
         object:
+    sender_identity:
+      name: Sender identity
+      description: Optional sender identity ID from this integration instance, for example default or alerts.
+      required: false
+      example: default
+      selector:
+        text:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:
 
 send_test_email:
   name: Send test S/MIME email
@@ -130,6 +143,12 @@ send_test_email:
       required: false
       selector:
         boolean:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:
 
 test_recipient_certificate:
   name: Test recipient certificate
@@ -142,15 +161,45 @@ test_recipient_certificate:
       example: person@example.org
       selector:
         text:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:
 
 clear_certificate_cache:
   name: Clear certificate cache
   description: Clear in-memory certificate caches.
 
+  fields:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:
+
 reload_certificates:
   name: Reload certificates
   description: Reload signing certificate and private key from configured paths.
 
+  fields:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:
+
 validate_config:
   name: Validate config
   description: Validate SMTP and certificate configuration.
+
+  fields:
+    config_entry_id:
+      name: S/MIME Notify instance
+      description: Config entry ID to use when multiple S/MIME Notify instances are configured.
+      required: false
+      selector:
+        text:

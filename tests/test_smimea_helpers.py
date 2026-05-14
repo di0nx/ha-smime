@@ -7,18 +7,23 @@ from datetime import UTC, datetime, timedelta
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.smime_notify.notify import (
     _build_smimea_owner_name,
     _certificate_emails,
     _certificate_from_smimea_record_data,
+    SmimeNotifyManager,
+    certificate_supports_pkcs7_recipient_encryption,
+    get_public_key_type,
 )
 
 
-def _build_test_cert(email: str) -> bytes:
-    key = ec.generate_private_key(ec.SECP256R1())
+def _build_test_cert(email: str, key=None) -> bytes:
+    if key is None:
+        key = ec.generate_private_key(ec.SECP256R1())
     now = datetime.now(UTC)
     cert = (
         x509.CertificateBuilder()
@@ -55,6 +60,34 @@ class TestSmimeaHelpers(unittest.TestCase):
             3, 0, 0, _build_test_cert("dion@kitsos.net")
         )
         self.assertIn("dion@kitsos.net", _certificate_emails(cert))
+
+    def test_ec_cert_is_not_supported_for_pkcs7_recipient_encryption(self) -> None:
+        cert = _certificate_from_smimea_record_data(
+            3, 0, 0, _build_test_cert("dion@kitsos.net")
+        )
+        self.assertEqual(get_public_key_type(cert), "EC")
+        self.assertFalse(certificate_supports_pkcs7_recipient_encryption(cert))
+
+    def test_rsa_cert_is_supported_for_pkcs7_recipient_encryption(self) -> None:
+        cert = _certificate_from_smimea_record_data(
+            3,
+            0,
+            0,
+            _build_test_cert(
+                "dion@kitsos.net",
+                rsa.generate_private_key(public_exponent=65537, key_size=2048),
+            ),
+        )
+        self.assertEqual(get_public_key_type(cert), "RSA")
+        self.assertTrue(certificate_supports_pkcs7_recipient_encryption(cert))
+
+    def test_encrypt_data_rejects_ec_cert_before_pkcs7_backend(self) -> None:
+        cert = _certificate_from_smimea_record_data(
+            3, 0, 0, _build_test_cert("dion@kitsos.net")
+        )
+        manager = SmimeNotifyManager.__new__(SmimeNotifyManager)
+        with self.assertRaisesRegex(HomeAssistantError, "only RSA"):
+            manager._encrypt_data(b"test", [("dion@kitsos.net", cert)])
 
 
 if __name__ == "__main__":

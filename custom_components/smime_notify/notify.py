@@ -23,13 +23,11 @@ import dns.flags
 import dns.resolver
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed25519, ed448, rsa
 from cryptography.hazmat.primitives.serialization import pkcs7
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-from homeassistant.components.notify import NotifyEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import slugify
 
@@ -41,6 +39,7 @@ from .const import (
     CONF_FILE_TYPES,
     CONF_FROM_EMAIL,
     CONF_FROM_NAME,
+    CONF_SENDER_IDENTITIES,
     CONF_HASH_MODE,
     CONF_LOCAL_SOURCE_ENABLED,
     CONF_INCLUDE_CERT_CHAIN,
@@ -63,7 +62,6 @@ from .const import (
     CONF_SMTP_TIMEOUT,
     CONF_SMTP_USERNAME,
     CONF_TLS_VERIFY,
-    DATA_MANAGER,
     DEFAULT_ALLOW_UNENCRYPTED_FALLBACK_DEFAULT,
     DEFAULT_ENCRYPT_DEFAULT,
     DEFAULT_FROM_NAME,
@@ -75,7 +73,6 @@ from .const import (
     DEFAULT_SOURCE_ORDER,
     DEFAULT_SIGN_DEFAULT,
     DEFAULT_SKIP_RECIPIENTS_WITHOUT_CERT_DEFAULT,
-    DOMAIN,
     DEFAULT_CERT_EXPIRY_WARNING_DAYS,
     DEFAULT_HASH_MODE,
     DEFAULT_LOCAL_FILE_TYPES,
@@ -171,6 +168,16 @@ class SmimeNotifyManager:
         merged.setdefault(CONF_SMIMEA_SOURCE_ENABLED, DEFAULT_SMIMEA_SOURCE_ENABLED)
         merged.setdefault(CONF_REMOTE_SOURCE_ENABLED, DEFAULT_REMOTE_SOURCE_ENABLED)
         merged.setdefault(CONF_REMOTE_TIMEOUT, DEFAULT_REMOTE_TIMEOUT)
+        merged.setdefault(
+            CONF_SENDER_IDENTITIES,
+            [
+                {
+                    "id": "default",
+                    "name": merged.get(CONF_FROM_NAME, DEFAULT_FROM_NAME),
+                    "email": merged.get(CONF_FROM_EMAIL, ""),
+                }
+            ],
+        )
         return merged
 
     @property
@@ -258,6 +265,7 @@ class SmimeNotifyManager:
             encrypt=encrypt,
             allow_unencrypted_fallback=None,
             skip_recipients_without_cert=None,
+            sender_identity_id=None,
             service_context="send_test_email",
         )
 
@@ -284,6 +292,8 @@ class SmimeNotifyManager:
             )
 
         cert = result.certificate
+        public_key_type = get_public_key_type(cert)
+        encryption_supported = certificate_supports_pkcs7_recipient_encryption(cert)
         _LOGGER.info(
             "Recipient certificate found for %s\n"
             "Source: %s\n"
@@ -294,7 +304,9 @@ class SmimeNotifyManager:
             "Not valid before: %s\n"
             "Not valid after: %s\n"
             "Email addresses: %s\n"
+            "Public key type: %s\n"
             "S/MIME suitable: yes\n"
+            "PKCS7 recipient encryption usable: %s\n"
             "DNS TTL: %s\n"
             "DNSSEC AD: %s",
             email,
@@ -310,9 +322,19 @@ class SmimeNotifyManager:
             cert.not_valid_before_utc.isoformat(),
             cert.not_valid_after_utc.isoformat(),
             ", ".join(_certificate_emails(cert)),
+            public_key_type,
+            "yes" if encryption_supported else "no",
             result.ttl if result.ttl is not None else "n/a",
             _format_dnssec_ad(result.dnssec_ad),
         )
+        if encryption_supported:
+            _LOGGER.info(
+                "Certificate is usable for recipient encryption with the current cryptography PKCS7 backend."
+            )
+        else:
+            _LOGGER.warning(
+                "Certificate is valid as an S/MIME identity certificate but cannot be used for recipient encryption with the current cryptography PKCS7 backend because only RSA recipient certificates are supported."
+            )
 
     async def async_send_service(self, call: ServiceCall) -> None:
         """Handle smime_notify.send service calls."""
@@ -379,6 +401,7 @@ class SmimeNotifyManager:
             encrypt=payload.get("encrypt"),
             allow_unencrypted_fallback=payload.get("allow_unencrypted_fallback"),
             skip_recipients_without_cert=payload.get("skip_recipients_without_cert"),
+            sender_identity_id=payload.get("sender_identity"),
             service_context=service_context,
         )
 
@@ -398,6 +421,7 @@ class SmimeNotifyManager:
         encrypt: bool | None,
         allow_unencrypted_fallback: bool | None,
         skip_recipients_without_cert: bool | None,
+        sender_identity_id: str | None,
         service_context: str,
     ) -> None:
         """Build and send an email with S/MIME options."""
@@ -415,6 +439,7 @@ class SmimeNotifyManager:
             if skip_recipients_without_cert is None
             else bool(skip_recipients_without_cert)
         )
+        sender_identity = self._get_sender_identity(sender_identity_id)
 
         recipient_groups = {
             "to": [_normalize_email(addr) for addr in to],
@@ -428,45 +453,96 @@ class SmimeNotifyManager:
             raise HomeAssistantError("No recipients specified")
 
         recipient_certs: dict[str, x509.Certificate] = {}
+        recipient_cert_results: dict[str, RecipientCertResult] = {}
         missing_cert_errors: dict[str, str] = {}
+        unsupported_cert_errors: dict[str, str] = {}
 
         if encrypt_flag:
             for email in all_recipients:
                 cert_result = await self._async_resolve_recipient_certificate(email)
+                recipient_cert_results[email] = cert_result
                 if cert_result.certificate:
-                    recipient_certs[email] = cert_result.certificate
+                    public_key_type = get_public_key_type(cert_result.certificate)
+                    source = cert_result.source or "unknown"
+                    if certificate_supports_pkcs7_recipient_encryption(
+                        cert_result.certificate
+                    ):
+                        recipient_certs[email] = cert_result.certificate
+                        _LOGGER.debug(
+                            "Recipient %s certificate source=%s public_key_type=%s will be used for S/MIME encryption",
+                            email,
+                            source,
+                            public_key_type,
+                        )
+                    else:
+                        unsupported_cert_errors[email] = (
+                            _unsupported_recipient_encryption_message(
+                                email, public_key_type
+                            )
+                        )
+                        _LOGGER.debug(
+                            "Recipient %s certificate source=%s public_key_type=%s is not supported for S/MIME encryption with cryptography PKCS7",
+                            email,
+                            source,
+                            public_key_type,
+                        )
                 else:
                     missing_cert_errors[email] = (
                         cert_result.error or "certificate not found"
                     )
 
-            if missing_cert_errors and skip_missing:
+            unusable_cert_errors = {**missing_cert_errors, **unsupported_cert_errors}
+            if unusable_cert_errors and skip_missing:
                 for group_name in ("to", "cc", "bcc"):
                     recipient_groups[group_name] = [
                         email
                         for email in recipient_groups[group_name]
-                        if email not in missing_cert_errors
+                        if email not in unusable_cert_errors
                     ]
+                for email in sorted(unsupported_cert_errors):
+                    public_key_type = get_public_key_type(
+                        recipient_cert_results[email].certificate
+                    )
+                    _LOGGER.warning(
+                        "Recipient %s skipped because certificate uses unsupported %s public key for encryption.",
+                        email,
+                        public_key_type,
+                    )
+                if missing_cert_errors:
+                    _LOGGER.warning(
+                        "Skipping recipients without certificate: %s",
+                        sorted(missing_cert_errors),
+                    )
                 if not any(recipient_groups.values()):
+                    if unsupported_cert_errors:
+                        raise HomeAssistantError(
+                            "No recipients left after filtering certificates unsupported for encryption."
+                        )
                     raise HomeAssistantError(
                         "Encryption requested but no recipients remain after skipping missing certificates"
                     )
-                _LOGGER.warning(
-                    "Skipping recipients without certificate: %s",
-                    sorted(missing_cert_errors),
-                )
-            elif missing_cert_errors and not allow_fallback:
-                missing_text = "; ".join(
-                    f"{email}: {error}" for email, error in missing_cert_errors.items()
+            elif unusable_cert_errors and not allow_fallback:
+                unusable_text = "; ".join(
+                    f"{email}: {error}" for email, error in unusable_cert_errors.items()
                 )
                 raise HomeAssistantError(
-                    f"Encryption requested, missing recipient certificates: {missing_text}"
+                    f"Encryption requested, recipient certificates unusable: {unusable_text}"
                 )
-            elif missing_cert_errors and allow_fallback:
-                _LOGGER.warning(
-                    "Encryption fallback triggered due to missing certificates: %s",
-                    ", ".join(sorted(missing_cert_errors)),
-                )
+            elif unusable_cert_errors and allow_fallback:
+                for email in sorted(unsupported_cert_errors):
+                    public_key_type = get_public_key_type(
+                        recipient_cert_results[email].certificate
+                    )
+                    _LOGGER.warning(
+                        "Sending unencrypted because recipient certificate for %s uses unsupported %s public key for cryptography PKCS7 encryption.",
+                        email,
+                        public_key_type,
+                    )
+                if missing_cert_errors:
+                    _LOGGER.warning(
+                        "Encryption fallback triggered due to missing certificates: %s",
+                        ", ".join(sorted(missing_cert_errors)),
+                    )
                 encrypt_flag = False
 
         base_message = await self.hass.async_add_executor_job(
@@ -480,6 +556,7 @@ class SmimeNotifyManager:
             reply_to,
             attachments,
             extra_headers,
+            sender_identity,
         )
         base_bytes = base_message.as_bytes(policy=SMTP)
 
@@ -490,6 +567,9 @@ class SmimeNotifyManager:
             signed_der = await self.hass.async_add_executor_job(
                 self._sign_data, base_bytes
             )
+            signed_message = self._build_pkcs7_wrapper(
+                base_message, signed_der, smime_type="signed-data"
+            )
             if encrypt_flag:
                 ordered_recipients = (
                     recipient_groups["to"]
@@ -498,16 +578,14 @@ class SmimeNotifyManager:
                 )
                 encrypted_der = await self.hass.async_add_executor_job(
                     self._encrypt_data,
-                    signed_der,
-                    [recipient_certs[email] for email in ordered_recipients],
+                    signed_message.as_bytes(policy=SMTP),
+                    [(email, recipient_certs[email]) for email in ordered_recipients],
                 )
                 final_message = self._build_pkcs7_wrapper(
                     base_message, encrypted_der, smime_type="enveloped-data"
                 )
             else:
-                final_message = self._build_pkcs7_wrapper(
-                    base_message, signed_der, smime_type="signed-data"
-                )
+                final_message = signed_message
         elif encrypt_flag:
             ordered_recipients = (
                 recipient_groups["to"]
@@ -517,7 +595,7 @@ class SmimeNotifyManager:
             encrypted_der = await self.hass.async_add_executor_job(
                 self._encrypt_data,
                 base_bytes,
-                [recipient_certs[email] for email in ordered_recipients],
+                [(email, recipient_certs[email]) for email in ordered_recipients],
             )
             final_message = self._build_pkcs7_wrapper(
                 base_message, encrypted_der, smime_type="enveloped-data"
@@ -534,10 +612,11 @@ class SmimeNotifyManager:
             recipients=recipient_groups["to"]
             + recipient_groups["cc"]
             + recipient_groups["bcc"],
+            from_email=str(sender_identity["email"]),
         )
 
     async def _async_send_smtp(
-        self, message: EmailMessage, recipients: list[str]
+        self, message: EmailMessage, recipients: list[str], from_email: str
     ) -> None:
         cfg = self.config
         encryption_mode = cfg[CONF_SMTP_ENCRYPTION]
@@ -562,9 +641,7 @@ class SmimeNotifyManager:
             username = str(cfg.get(CONF_SMTP_USERNAME) or "").strip()
             if username:
                 await smtp.login(username, str(cfg.get(CONF_SMTP_PASSWORD) or ""))
-            await smtp.sendmail(
-                str(cfg[CONF_FROM_EMAIL]), recipients, message.as_bytes(policy=SMTP)
-            )
+            await smtp.sendmail(from_email, recipients, message.as_bytes(policy=SMTP))
         except Exception as err:
             raise HomeAssistantError("SMTP send failed") from err
         finally:
@@ -584,11 +661,11 @@ class SmimeNotifyManager:
         reply_to: str | None,
         attachments: list[str],
         extra_headers: dict[str, str],
+        sender_identity: dict[str, str],
     ) -> EmailMessage:
-        cfg = self.config
         message = EmailMessage()
-        from_name = str(cfg.get(CONF_FROM_NAME) or "").strip()
-        from_email = str(cfg.get(CONF_FROM_EMAIL) or "").strip()
+        from_name = str(sender_identity.get("name") or "").strip()
+        from_email = str(sender_identity.get("email") or "").strip()
 
         message["From"] = f"{from_name} <{from_email}>" if from_name else from_email
         message["Subject"] = title
@@ -715,10 +792,20 @@ class SmimeNotifyManager:
         return builder.sign(serialization.Encoding.DER, [pkcs7.PKCS7Options.Binary])
 
     def _encrypt_data(
-        self, data: bytes, recipient_certs: list[x509.Certificate]
+        self, data: bytes, recipient_certs: list[tuple[str, x509.Certificate]]
     ) -> bytes:
         builder = pkcs7.PKCS7EnvelopeBuilder().set_data(data)
-        for cert in recipient_certs:
+        for email, cert in recipient_certs:
+            public_key_type = get_public_key_type(cert)
+            if not certificate_supports_pkcs7_recipient_encryption(cert):
+                raise HomeAssistantError(
+                    _unsupported_recipient_encryption_message(email, public_key_type)
+                )
+            _LOGGER.debug(
+                "Adding recipient %s public_key_type=%s to PKCS7 envelope",
+                email,
+                public_key_type,
+            )
             builder = builder.add_recipient(cert)
         return builder.encrypt(serialization.Encoding.DER, [pkcs7.PKCS7Options.Binary])
 
@@ -825,15 +912,6 @@ class SmimeNotifyManager:
         return ordered or ["local"]
 
     def _resolve_recipient_certificate_local(self, email: str) -> RecipientCertResult:
-        if not self.config.get(CONF_LOCAL_SOURCE_ENABLED, True):
-            return RecipientCertResult(
-                email=email,
-                certificate=None,
-                source="local",
-                location=None,
-                error="local certificate source disabled",
-            )
-
         cert_dir = Path(str(self.config.get(CONF_LOCAL_CERT_DIR) or "").strip())
         attempted: list[str] = []
         if not cert_dir.exists() or not cert_dir.is_dir():
@@ -1066,6 +1144,34 @@ class SmimeNotifyManager:
             attempted_locations=attempted,
         )
 
+    def _get_sender_identity(self, sender_identity_id: str | None) -> dict[str, str]:
+        identities = self.config.get(CONF_SENDER_IDENTITIES) or []
+        normalized: list[dict[str, str]] = []
+        for item in identities:
+            if not isinstance(item, dict):
+                continue
+            identity = {
+                "id": str(item.get("id") or "").strip(),
+                "name": str(item.get("name") or "").strip(),
+                "email": str(item.get("email") or "").strip(),
+            }
+            if identity["id"] and identity["email"]:
+                normalized.append(identity)
+        if not normalized:
+            normalized.append(
+                {
+                    "id": "default",
+                    "name": str(self.config.get(CONF_FROM_NAME) or "").strip(),
+                    "email": str(self.config.get(CONF_FROM_EMAIL) or "").strip(),
+                }
+            )
+        if sender_identity_id:
+            for identity in normalized:
+                if identity["id"] == sender_identity_id:
+                    return identity
+            raise HomeAssistantError(f"Unknown sender_identity: {sender_identity_id}")
+        return normalized[0]
+
     def _validated_file_types(self) -> list[str]:
         configured = self.config.get(CONF_FILE_TYPES, DEFAULT_LOCAL_FILE_TYPES)
         file_types: list[str] = []
@@ -1076,41 +1182,6 @@ class SmimeNotifyManager:
         return file_types
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    """Set up the S/MIME notify entity for a config entry."""
-    manager = hass.data[DOMAIN][entry.entry_id][DATA_MANAGER]
-    async_add_entities([SmimeNotifyEntity(manager, entry)])
-
-
-class SmimeNotifyEntity(NotifyEntity):
-    """Notify entity for S/MIME email messages."""
-
-    _attr_has_entity_name = True
-    _attr_name = None
-    _attr_icon = "mdi:email-lock"
-
-    def __init__(self, manager: SmimeNotifyManager, entry: ConfigEntry) -> None:
-        self._manager = manager
-        self._attr_unique_id = entry.entry_id
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": entry.title,
-            "manufacturer": "S/MIME Notify",
-        }
-
-    async def async_send_message(self, message: str, title: str | None = None) -> None:
-        """Send a notification message through the configured S/MIME mailer."""
-        await self._manager.async_send_smime_mail(
-            {"title": title or "", "message": message}, service_context="notify_entity"
-        )
-        if hasattr(self, "_async_record_notification"):
-            self._async_record_notification()
-
-
 def _normalize_email(email: str) -> str:
     return str(email).strip().lower()
 
@@ -1119,6 +1190,40 @@ def _format_dnssec_ad(value: bool | None) -> str:
     if value is None:
         return "unknown"
     return str(value).lower()
+
+
+def get_public_key_type(cert: x509.Certificate | None) -> str:
+    """Return a human-readable public key type for a certificate."""
+    if cert is None:
+        return "unknown"
+    public_key = cert.public_key()
+    if isinstance(public_key, rsa.RSAPublicKey):
+        return "RSA"
+    if isinstance(public_key, ec.EllipticCurvePublicKey):
+        return "EC"
+    if isinstance(public_key, ed25519.Ed25519PublicKey):
+        return "Ed25519"
+    if isinstance(public_key, ed448.Ed448PublicKey):
+        return "Ed448"
+    if isinstance(public_key, dsa.DSAPublicKey):
+        return "DSA"
+    return "unknown"
+
+
+def certificate_supports_pkcs7_recipient_encryption(
+    cert: x509.Certificate | None,
+) -> bool:
+    """Return whether cryptography PKCS7 can encrypt for this recipient cert."""
+    return cert is not None and isinstance(cert.public_key(), rsa.RSAPublicKey)
+
+
+def _unsupported_recipient_encryption_message(email: str, public_key_type: str) -> str:
+    return (
+        f"Recipient certificate for {email} uses {public_key_type} public key. "
+        "S/MIME encryption with the current cryptography PKCS7 backend supports "
+        "only RSA recipient certificates. Use an RSA S/MIME recipient "
+        "certificate or add an OpenSSL backend."
+    )
 
 
 def _sha256_email(email: str) -> str:
